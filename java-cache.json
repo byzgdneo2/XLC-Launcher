@@ -1,5 +1,5 @@
 {
-  "t": 1792889903764,
+  "t": 1792898052246,
   "list": [
     {
       "path": "D:\\JAVA25\\bin\\javaw.exe",
@@ -58,11 +58,11 @@
       "mtimeMs": 1791335955930.9883
     },
     {
-      "path": "C:\\Program Files\\Java\\jre1.8.0_503\\bin\\javaw.exe",
+      "path": "C:\\Program Files\\Java\\jre1.8.0_511\\bin\\javaw.exe",
       "major": 8,
-      "ver": "8.0.503",
+      "ver": "8.0.511",
       "size": 311480,
-      "mtimeMs": 1784781228000
+      "mtimeMs": 1792774416000
     },
     {
       "path": "D:\\JDK8u312\\bin\\javaw.exe",
@@ -81,9 +81,9 @@
     {
       "path": "C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path\\javaw.exe",
       "major": 8,
-      "ver": "8.0.503",
-      "size": 1483408,
-      "mtimeMs": 1784784282000
+      "ver": "8.0.511",
+      "size": 1462416,
+      "mtimeMs": 1792776886000
     }
   ]
 }
