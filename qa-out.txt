@@ -1,6 +1,0 @@
-
-[29096:0925/114414.452:ERROR:network_change_notifier_win.cc(188)] WSALookupServiceBegin failed with: 10108
-[QA-MIRROR] 官方 GET => HTTP 200 · 1033ms
-[QA-MIRROR] 镜像 GET => HTTP 200 · 183ms
-[QA-MIRROR] 镜像项目 GET => HTTP 200 · 139ms
-[QA-MIRROR] 镜像 CDN GET => HTTP 200 · 1757ms
