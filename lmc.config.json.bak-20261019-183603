@@ -1,0 +1,94 @@
+{
+  "source": "bmclapi",
+  "customSource": "",
+  "gameDir": "D:\\PCL 正式版 2.13.0.1\\.minecraft",
+  "javaPath": "",
+  "mem": 4,
+  "memAuto": true,
+  "jvmArgs": "",
+  "gameArgs": "",
+  "preLaunchCmd": "",
+  "winTitle": "",
+  "winSize": {
+    "w": 0,
+    "h": 0,
+    "max": false
+  },
+  "forceIsolate": "auto",
+  "procPriority": "normal",
+  "launcherVisibility": "keep",
+  "gpuPref": false,
+  "speedLimit": 0,
+  "forceChinese": true,
+  "defaultVersion": "",
+  "lastVersion": "26.3-Fabric 0.19.5",
+  "versionSettings": {},
+  "username": "LC",
+  "accounts": [
+    {
+      "name": "LC",
+      "skin": "skin_LC_1792156967627.png",
+      "model": "classic"
+    },
+    {
+      "name": "LC1",
+      "skin": "skin_LC1_1790383853831.png",
+      "model": "classic"
+    }
+  ],
+  "msClientId": "",
+  "activeAccount": "LC",
+  "bgMode": "default",
+  "bgColor": "",
+  "accentColor": "",
+  "bgImage": "",
+  "turboMode": false,
+  "recent": [
+    {
+      "id": "26.3-Fabric 0.19.5",
+      "time": 1792241836190
+    },
+    {
+      "id": "26.2-OptiFine_K2_pre1",
+      "time": 1792211774525
+    },
+    {
+      "id": "26.2",
+      "time": 1791177176875
+    },
+    {
+      "id": "26.2-Fabric 0.19.5",
+      "time": 1790398701605
+    }
+  ],
+  "friendCode": "YD58-NRNE-T3R3",
+  "friends": [],
+  "aiApi": {
+    "base": "",
+    "key": "",
+    "model": "gpt-4o-mini"
+  },
+  "plugins": {
+    "seedmap": true,
+    "server": true,
+    "gamepad": true
+  },
+  "pluginPerms": {},
+  "gamepad": {
+    "enabled": true,
+    "deadzone": 0.28,
+    "speed": "normal",
+    "vibrate": true,
+    "osd": true
+  },
+  "updateUrl": "",
+  "autoCheckUpdate": true,
+  "skipPreviewUpdate": false,
+  "ignoredVersion": "",
+  "lastUpdateCheck": 1792290638493,
+  "liquidGlass": false,
+  "lgStrength": 2,
+  "seenVersion": "1.2-snapshot3",
+  "dlThreads": 64,
+  "visKeepMigrated": true
+}

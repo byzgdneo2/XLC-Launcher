@@ -1,0 +1,61 @@
+{
+  "name": "xlc-launcher",
+  "productName": "Xero Lite Craft Launcher 1.2-rc2",
+  "version": "1.8.0",
+  "description": "Xero Lite Craft (XLC) - 现代化 Minecraft 启动器",
+  "main": "main.js",
+  "author": "Xero Lite Craft",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.xlc.launcher",
+    "productName": "Xero Lite Craft Launcher 1.2-rc2",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "plugin-preload.js",
+      "zipio.js",
+      "src/**/*",
+      "assets/**/*",
+      "terracotta/LICENSE.txt",
+      "data/**/*",
+      "package.json",
+      "LICENSE",
+      "THIRD-PARTY.md",
+      "!tools/**",
+      "!logs/**",
+      "!icon-cache/**",
+      "!dist/**",
+      "!lmc.config.json",
+      "!smoke-out.txt",
+      "!ui-out.txt"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "XLC-Launcher-1.2-rc2-portable.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^9.1.0"
+  }
+}
