@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('lmc', {
   resDelete: (p) => ipcRenderer.invoke('res:delete', p),
   resExportCsv: (p) => ipcRenderer.invoke('res:export-csv', p),
   diagLauncher: () => ipcRenderer.invoke('diag:launcher'),
+  diagReports: (p) => ipcRenderer.invoke('diag:reports', p),
   diagGame: (p) => ipcRenderer.invoke('diag:game', p),
   diagAi: (p) => ipcRenderer.invoke('diag:ai', p),
   accountList: () => ipcRenderer.invoke('account:list'),

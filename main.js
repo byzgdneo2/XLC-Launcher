@@ -139,7 +139,7 @@ try {
    → 1.1-snapshot1 → 1.1-snapshot2 → 1.1-pre1 → 1.1-rc1 → **1.1（1.1 正式版：设置页照 PCL 分类、
    离线皮肤改用标准的本地签名 Yggdrasil 服务、版本列表方块图标、修复启动后窗口消失）**
    → **1.2-snapshot2（1.2 第二个快照：可见性默认改「保持显示」+ 老配置迁移、快照版专用 UI 回归、账户设置、存档预览实时检测、插件读写设置 control、极速模式）**
-   → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**
+   → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**→ 1.2-rc4（游戏诊断 v2：崩溃报告可选可析、规则 25 条、不限日志新旧）
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -148,7 +148,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.2-rc3';
+const APP_VERSION = '1.2-rc4';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -8840,22 +8840,75 @@ app.on('will-quit', () => {
 });
 
 /* ---------------- 诊断：游戏崩溃分析 ---------------- */
-/* 规则引擎：从崩溃报告 / 日志识别已知错误原因并给出修复建议 */
+/* 规则引擎：从崩溃报告 / 日志识别已知错误原因并给出修复建议。
+ * 匹配分两档：在崩溃报告里命中 = 确定原因（tier:'sure'）；只在日志里命中 = 疑似原因（tier:'maybe'）。
+ * 分析不限日志新旧 —— 选哪份报告就分析哪份，新鲜度只用来标记「是不是刚刚发生的」。 */
 const CRASH_RULES = [
   { re: /UnsupportedClassVersionError|class file version .* this version/i, title: 'Java 版本过旧', why: '当前使用的 Java 无法运行这个版本的游戏（class 文件版本不受支持）。', fix: '在「设置 → 检测 Java」里选用更高版本的 Java（26.x 需要 Java 21+；老版本需要 Java 8）。启动器会自动安装官方运行时。' },
   { re: /OutOfMemoryError|Could not reserve enough space|Ran out of memory/i, title: '内存不足（OOM）', why: '游戏堆内存耗尽。MOD 越多、渲染距离越大，需要的内存越多。', fix: '「游戏设置 → 基础设置 → 内存」调大分配（建议 6-8G）；也可以开启智能内存分配。' },
+  { re: /Invalid maximum heap size|Could not reserve enough space for object heap/i, title: '内存参数超出限制', why: '分配的内存超过了当前 Java（通常是 32 位）能接受的上限。', fix: '装 64 位 Java（设置 → Java 运行时可自动安装），再把内存调到 32 位上限以内（约 1.5G）。' },
   { re: /ModResolutionException|Missing or unsupported mandatory dependencies|Missing mods/i, title: 'MOD 依赖缺失', why: '有 MOD 的前置（依赖）MOD 没装或版本不对。', fix: '看崩溃报告里 requires 后面的依赖名，到「下载 → MOD」安装对应前置；或直接删除不需要的 MOD。' },
   { re: /Incompatible mod set!|incompatible mods set|found incompatible mod/i, title: 'MOD 兼容冲突', why: 'MOD 之间声明的环境互相冲突（通常是同一 MOD 装了两份或加载器不匹配）。', fix: '到「游戏设置 → MOD 管理」检查是否重复安装；确认 MOD 是给当前加载器（Fabric/Forge）的版本。' },
   { re: /MixinApplyError|Critical injection failure|Mixin .* failed|MixinTargets not matched/i, title: 'Mixin 注入失败', why: '某个 MOD 的代码注入与当前游戏版本或其他 MOD 不兼容。', fix: '把报错里提到的 MOD 更新到与当前 MC 版本匹配的版本，或暂时禁用它验证。' },
-  { re: /Duplicate mod|Duplicate Mods|duplicated mod/i, title: 'MOD 重复安装', why: '同一个 MOD（可能新旧不同文件名）被装了两份。', fix: '在「游戏设置 → MOD 管理」删除其中一个（注意 .disabled 文件不算，但要留意类似 xxx-1.0 和 xxx-1.2 并存的情况）。' },
+  { re: /Duplicate mod|Duplicate Mods|duplicated mod|DuplicateModsFoundException/i, title: 'MOD 重复安装', why: '同一个 MOD（可能新旧不同文件名）被装了两份。', fix: '在「游戏设置 → MOD 管理」删除其中一个（注意 .disabled 文件不算，但要留意类似 xxx-1.0 和 xxx-1.2 并存的情况）。' },
   { re: /requires minecraft (\d+\.\d+(?:\.\d+)?)/i, title: '游戏版本不匹配', why: 'MOD 声明它只支持特定的 Minecraft 版本，与当前实例不符。', fix: '换用与实例版本匹配的 MOD 版本（下载页会按版本筛选；安装时也会检测提示）。' },
   { re: /Attempting to load a Fabric mod .* (?:with|on) .*Forge|Found 1 Fabric mod .* Forge|not a Forge mod/i, title: '加载器不匹配（Fabric MOD 装在了 Forge 实例）', why: 'MOD 的加载器和实例不一致。', fix: '到「下载 → MOD」筛选与实例相同的加载器重新下载；删掉装错的 jar。' },
   { re: /Attempting to load a Forge mod .* Fabric|is not a Fabric mod|fabric.*(?:incompatible|non-fabric)/i, title: '加载器不匹配（Forge MOD 装在了 Fabric 实例）', why: 'MOD 的加载器和实例不一致。', fix: '到「下载 → MOD」筛选与实例相同的加载器重新下载；删掉装错的 jar。' },
-  { re: /GL_KHR|OpenGL|GLError|pixel format|Failed to create window|dxdiag/i, title: '显卡 / OpenGL 问题', why: '显卡驱动或 OpenGL 环境异常（常见于集显或远程桌面）。', fix: '更新显卡驱动；笔记本双显卡时在显卡控制面板里强制游戏使用独立显卡。' },
+  { re: /GL_KHR|OpenGL|GLError|pixel format|Failed to create window|dxdiag|GLFW (?:error|init)|Unable to (?:create|initialize) GLFW/i, title: '显卡 / OpenGL 问题', why: '显卡驱动或 OpenGL 环境异常（常见于集显、远程桌面或老驱动）。', fix: '更新显卡驱动；笔记本双显卡时在显卡控制面板里强制游戏使用独立显卡。' },
   { re: /Access is denied|Permission denied|OptiFine.*unable|Unable to (?:write|create|access)/i, title: '文件权限问题', why: '游戏目录里有文件被占用或权限不足（常见：杀毒软件锁定）。', fix: '把游戏目录加入杀毒软件白名单，关闭占文件的程序后重试。' },
   { re: /Failed to (?:download|verify)|Error downloading|Could not (?:download|resolve)/i, title: '资源下载失败', why: '启动时下载库文件 / 资源文件失败（网络波动）。', fix: '重试启动；必要时在「设置」里切换下载源。' },
-  { re: /mod\.toml|META-INF.*mod|Invalid mod|not a valid (?:jar|mod)/i, title: '损坏的 MOD 文件', why: '某个 jar 文件下载不完整或已损坏。', fix: '在「游戏设置 → MOD 管理」删除报错文件后重新下载。' }
+  { re: /mod\.toml|META-INF.*mod|Invalid mod|not a valid (?:jar|mod)/i, title: '损坏的 MOD 文件', why: '某个 jar 文件下载不完整或已损坏。', fix: '在「游戏设置 → MOD 管理」删除报错文件后重新下载。' },
+  /* ---- 扩充规则（v2）---- */
+  { re: /InaccessibleObjectException|Unable to make .* accessible|module .* does not .* (?:opens|export)|cannot access class .* module .* does not/i, title: 'Java 版本过新（模块系统拦截）', why: '游戏或 MOD 用了 Java 模块系统不允许的反射访问，常见于用太新的 Java 跑老游戏。', fix: '改用与游戏版本匹配的 Java（1.17→Java 16、1.18~1.20.4→Java 17、1.20.5+→Java 21）；启动器会按版本自动选。' },
+  { re: /NoClassDefFoundError/i, title: '依赖库缺失或损坏', why: '运行时找不到某个类——通常是库文件损坏、被杀毒软件误删，或 MOD 前置版本不对。', fix: '看报错里缺的类属于哪个 MOD/库，重装对应 MOD；确认游戏文件完整（必要时重装该版本）。' },
+  { re: /java\.lang\.StackOverflowError/i, title: '调用栈溢出（递归冲突）', why: '代码无限递归——常见于 MOD 事件互相触发或配置死循环。', fix: '按崩溃栈里反复出现的 MOD 名排查，先禁用最可疑的 MOD 验证。' },
+  { re: /Bad magic number|VerifyError|IncompatibleClassChangeError/i, title: '类文件损坏', why: '某个 jar 里的字节码损坏（下载不完整、磁盘错误或被杀毒软件改写）。', fix: '删除报错对应的 jar 后重新下载；必要时重装该实例的加载器。' },
+  { re: /Could not find or load main class|Main class .* (?:not found|missing)/i, title: '启动主类缺失', why: '加载器/游戏核心文件没装全，JVM 找不到入口类。', fix: '到「游戏设置 → 修改」重装一次加载器；确认实例目录里 libraries 完整（不要手动删）。' },
+  { re: /nightconfig|Parsing error.*\.toml|Failed to (?:load|parse) (?:the )?config|ConfigFileNotFoundException|TomlParseError/i, title: 'MOD 配置文件损坏', why: '某个 MOD 的配置文件（.toml/.json）内容损坏或版本不兼容。', fix: '到实例 config 目录把报错里提到的配置文件删掉（或改后缀备份），重启游戏让它重新生成。' },
+  { re: /# A fatal error has been detected|SIGSEGV|EXCEPTION_ACCESS_VIOLATION|EXCEPTION_ILLEGAL_INSTRUCTION/i, title: 'JVM 原生崩溃', why: 'Java 虚拟机本身崩了——多半是显卡驱动、系统库或内存条不稳定，游戏 MOD 一般管不到这一层。', fix: '更新显卡驱动；关闭超频/内存超频；到实例目录找 hs_err_pid*.log 把「Problematic frame」里的模块名对号入座。' },
+  { re: /Connection refused|UnknownHostException|SocketTimeoutException|Connection timed out/i, title: '网络连接失败', why: '游戏或 MOD 连不上服务器（联机、正版会话、在线资源）。', fix: '检查网络与代理；联机看服务器地址与端口；正版会话问题可稍后重试。' },
+  { re: /Invalid session|Failed to verify username|Session servers|bound to a profile|authentication servers are down/i, title: '会话验证失败', why: '以离线/外置登录身份进入了要求正版会话的服务器，或会话服务器暂时不可用。', fix: '正版服务器需要微软正版账户登录；外置登录确认认证服务器地址与账号正确。' },
+  { re: /Failed to (?:create|compile|link) (?:the )?shader|GLSL|ShaderLinkException|shader.*(?:error|failed)|Iris.*(?:error|fatal)/i, title: '光影 / 着色器加载失败', why: '光影包与当前显卡或游戏版本不兼容（部分光影只支持较新的显卡特性）。', fix: '换一个光影包试试；更新显卡驱动；确认光影包支持当前游戏版本与 Iris/OptiFine。' },
+  { re: /IOException.*region|AnvilParser|corrupt(?:ed)? (?:chunk|region|save)|MalformedNBT|Tried to load a block entity|Failed to (?:read|load) (?:chunk|level)/i, title: '存档 / 区块损坏', why: '存档文件部分损坏（强退、磁盘故障或版本降级都可能导致）。', fix: '先备份整个存档；用 MCEdit/NBTExplorer 删掉损坏区块；测试实例建议开「版本隔离」避免互相影响。' }
 ];
+
+/* 解析崩溃报告结构：Description / 首个异常 / Caused by 链 / Suspected Mods / 证据行 */
+function parseCrashReport(text) {
+  const lines = text.split('\n');
+  let desc = null;
+  const di = lines.findIndex(l => /^Description:\s*/.test(l));
+  if (di >= 0 && lines[di + 1] && lines[di + 1].trim()) desc = lines[di + 1].trim().slice(0, 180);
+  if (!desc) {
+    const ex = lines.find(l => /(?:Exception|Error)\b/.test(l) && !/^\s*at /.test(l) && l.trim());
+    if (ex) desc = ex.trim().slice(0, 180);
+  }
+  const head = (lines.find(l => /(?:Exception|Error)\b/.test(l) && l.trim()) || '').trim().slice(0, 180);
+  const causedBy = lines.filter(l => /^\s*Caused by:/.test(l)).map(l => l.trim().slice(0, 180)).slice(0, 4);
+  const suspected = [];
+  const susIdx = lines.findIndex(l => /Suspected Mods:/i.test(l));
+  if (susIdx >= 0) {
+    for (let i = susIdx + 1; i < lines.length && suspected.length < 10; i++) {
+      const l = lines[i].trim();
+      if (!l || /^(?:Stacktrace|Detail|System Details)/i.test(l)) break;
+      const m = l.match(/(\S+\.jar)/i);
+      if (m) suspected.push(path.basename(m[1]));
+    }
+  }
+  for (const l of lines) {
+    const m = l.match(/-->\s*(?:MOD )?(\S+\.jar)/i);
+    if (m) suspected.push(path.basename(m[1]));
+  }
+  const evidence = [];
+  for (const l of lines) {
+    const s = l.trim();
+    if (!s) continue;
+    if (/(?:Exception|Error)\b/.test(s) || /^\tat /.test(l) || /^Caused by/.test(s) || /^Description/.test(s)) {
+      evidence.push(l.length > 220 ? l.slice(0, 220) + '…' : l);
+      if (evidence.length >= 12) break;
+    }
+  }
+  return { desc, head, causedBy, suspected: [...new Set(suspected)], evidence };
+}
 
 function findCrashFiles(gameDir, instanceId) {
   const roots = [gameDir];
@@ -8884,39 +8937,89 @@ function findCrashFiles(gameDir, instanceId) {
   return out;
 }
 
-async function diagnoseGameCrash(gameDir, instanceId) {
+/* 列出实例可诊断的崩溃报告（不限时间），带解析出的异常标题供下拉选择。
+ * 指定隔离实例时只列该实例的 reports（不混入全局的，避免排序抢位）；未指定才列全局。 */
+function listCrashReports(gameDir, instanceId) {
+  const roots = [];
+  if (instanceId) {
+    if (safeInstanceDir(instanceId)) {
+      const vDir = path.join(gameDir, 'versions', instanceId);
+      try { if (fs.statSync(vDir).isDirectory()) roots.push(vDir); } catch (_) {}
+    }
+  } else {
+    roots.push(gameDir);
+  }
+  if (!roots.length) return [];
+  const out = [];
+  for (const root of roots) {
+    const dir = path.join(root, 'crash-reports');
+    let files = [];
+    try { files = fs.readdirSync(dir).filter(f => /^crash-.*\.txt$/i.test(f)); } catch (_) { continue; }
+    for (const f of files) {
+      const fp = path.join(dir, f);
+      try {
+        const st = fs.statSync(fp);
+        const fh = fs.openSync(fp, 'r');
+        const buf = Buffer.alloc(Math.min(st.size, 4096));
+        fs.readSync(fh, buf, 0, buf.length, 0);
+        fs.closeSync(fh);
+        const p = parseCrashReport(buf.toString('utf8'));
+        out.push({
+          path: fp, time: st.mtimeMs,
+          fresh: Date.now() - st.mtimeMs < 30 * 60 * 1000,
+          headline: (p.desc || p.head || '（未识别到异常行）').slice(0, 130)
+        });
+      } catch (_) {}
+    }
+  }
+  out.sort((a, b) => b.time - a.time);
+  return out.slice(0, 30);
+}
+
+async function readLogTail(p, bytes = 300000) {
+  try {
+    const st = fs.statSync(p);
+    const fh = await fsp.open(p, 'r');
+    const buf = Buffer.alloc(Math.min(st.size, bytes));
+    await fh.read(buf, 0, buf.length, Math.max(0, st.size - buf.length));
+    await fh.close();
+    return buf.toString('utf8');
+  } catch (_) { return ''; }
+}
+
+async function diagnoseGameCrash(gameDir, instanceId, reportPath, logOnly) {
   const files = findCrashFiles(gameDir, instanceId);
   const now = Date.now();
-  const sources = [];
-  /* 只看 30 分钟内的报告，避免把上个月的旧崩溃翻出来 */
   const FRESH = 30 * 60 * 1000;
-  let reportText = '', logText = '';
-  if (files.report && now - files.report.time < FRESH * 24 * 3) {
-    try { reportText = fs.readFileSync(files.report.path, 'utf8'); } catch (_) {}
+  /* 选定要分析的崩溃报告：显式指定 > 实例最新 > 全局最新（都不限时间）；
+     logOnly=true 时一律不读报告，只分析 latest.log */
+  let chosen = null;
+  if (!logOnly) {
+    if (reportPath) {
+      try { chosen = { path: reportPath, time: fs.statSync(reportPath).mtimeMs }; }
+      catch (_) { return { found: false, note: '所选崩溃报告文件不存在或已被移动。' }; }
+    } else if (files.report) chosen = files.report;
   }
-  if (files.log) {
-    try {
-      const st = fs.statSync(files.log.path);
-      if (now - st.mtimeMs < FRESH) {
-        const fh = await fsp.open(files.log.path, 'r');
-        const size = st.size;
-        const buf = Buffer.alloc(Math.min(size, 300000));
-        await fh.read(buf, 0, buf.length, Math.max(0, size - buf.length));
-        await fh.close();
-        logText = buf.toString('utf8');
-      }
-    } catch (_) {}
+  let reportText = '';
+  if (chosen) { try { reportText = fs.readFileSync(chosen.path, 'utf8'); } catch (_) {} }
+  const logText = files.log ? await readLogTail(files.log.path) : '';
+  const reportFresh = !!(chosen && now - chosen.time < FRESH);
+  const logFresh = !!(files.log && now - files.log.time < FRESH);
+  if (!reportText && !logText.trim()) {
+    return { found: false, note: instanceId ? '该实例没有崩溃报告，也没有可分析的游戏日志。' : '没有崩溃报告，也没有可分析的游戏日志。' };
   }
-  if (files.report && !reportText) reportText = '';
-  const haystack = reportText + '\n' + logText;
-  if (!haystack.trim()) return { found: false, note: '最近没有新的崩溃报告或游戏日志。' };
 
+  const parsed = reportText ? parseCrashReport(reportText) : null;
+  /* 规则匹配：报告命中 = 确定原因，仅日志命中 = 疑似原因 */
   const rules = [];
   for (const r of CRASH_RULES) {
-    const m = haystack.match(r.re);
-    if (m) rules.push({ title: r.title, why: r.why, fix: r.fix, match: m[0].slice(0, 120) });
+    const mR = reportText ? reportText.match(r.re) : null;
+    const mL = logText ? logText.match(r.re) : null;
+    if (mR) rules.push({ title: r.title, why: r.why, fix: r.fix, match: mR[0].slice(0, 120), tier: 'sure', src: '崩溃报告' });
+    else if (mL) rules.push({ title: r.title, why: r.why, fix: r.fix, match: mL[0].slice(0, 120), tier: 'maybe', src: '游戏日志' });
   }
   /* 提取涉及的 MOD 文件名 */
+  const haystack = reportText + '\n' + logText;
   const modsInvolved = [];
   const modRe = /(?:mods[/\\])?([\w\-\.\[\]\u4e00-\u9fff+ ]+\.jar(?:\.disabled)?)/gi;
   let mm; const seen = new Set();
@@ -8925,18 +9028,36 @@ async function diagnoseGameCrash(gameDir, instanceId) {
     const n = tail ? tail[0] : '';
     if (n && /\.jar(\.disabled)?$/i.test(n) && !seen.has(n)) { seen.add(n); modsInvolved.push(n); }
   }
+  if (parsed && parsed.suspected.length) for (const n of parsed.suspected) {
+    if (modsInvolved.length >= 10) break;
+    if (!seen.has(n)) { seen.add(n); modsInvolved.unshift(n); }
+  }
   /* 游戏要求的 Java 版本（class file version → Java 大版本） */
   let javaNeed = null;
   const cfv = haystack.match(/class file version ([\d.]+)/i);
   if (cfv) { const v = parseFloat(cfv[1]); javaNeed = Math.max(8, Math.round(v - 44)); }
+  /* 无报告时展示日志里的错误行 */
+  const errorLines = [];
+  if (!reportText && logText) {
+    for (const l of logText.split('\n')) {
+      if (/\/ERROR\]|\bException\b|\bERROR\b/.test(l)) {
+        errorLines.push(l.length > 220 ? l.slice(0, 220) + '…' : l);
+        if (errorLines.length >= 8) break;
+      }
+    }
+  }
+  const clean = !reportText && !rules.length && !errorLines.length && !!logText.trim();
   const excerpt = (reportText || logText || '').slice(-6000);
   return {
     found: true,
-    reportPath: files.report ? files.report.path : null,
+    reportPath: chosen ? chosen.path : null,
     logPath: files.log ? files.log.path : null,
-    reportFresh: !!(files.report && now - files.report.time < FRESH),
-    logFresh: !!(files.log && now - files.log.time < FRESH),
-    rules, modsInvolved, javaNeed, excerpt, instance: instanceId || ''
+    reportFresh, logFresh,
+    headline: parsed ? parsed.desc : null,
+    causedBy: parsed ? parsed.causedBy : [],
+    evidence: parsed ? parsed.evidence : errorLines,
+    logOnly: !reportText,
+    clean, rules, modsInvolved, javaNeed, excerpt, instance: instanceId || ''
   };
 }
 
@@ -9381,6 +9502,26 @@ function updateParserSelfTest() {
  * 公告「属于当前版本」：改完就往 version 与 APP_VERSION 相同的那条里加条目 ——
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
+  {
+    version: '1.2-rc4',
+    date: '2026-10-25',
+    tag: '1.2 候选版',
+    notice: '1.2 候选版第四弹（rc4）：游戏诊断全面重做 —— 崩溃报告可选可析、识别规则翻倍、不再有「日志太旧就不看」的限制。候选版以稳定为主，若一切顺利将作为 1.2 正式版发布。',
+    groups: [
+      {
+        icon: 'i-pulse',
+        title: '重做 · 游戏崩溃诊断',
+        items: [
+          '**不再有 30 分钟限制**：以前日志一旧就直接说「最近没有新的崩溃报告」，现在选哪份分析哪份，历史崩溃照常诊断（只标注发生时间）',
+          '**崩溃报告可选**：诊断页新增报告下拉，列出该实例所有崩溃报告（〔最新〕标记 + 时间 + 异常标题），支持「只分析游戏日志」与一键刷新',
+          '**解析崩溃报告结构**：提取 Description 崩溃标题、Caused by 异常链、Suspected Mods 涉案 MOD，结果里可直接展开「关键日志行」看证据',
+          '**识别规则 13 → 25 条**：新增 Java 过新（模块系统拦截）、32 位内存参数超限、启动主类缺失、依赖库缺失、栈溢出、类文件损坏、MOD 配置文件损坏、JVM 原生崩溃（hs_err）、网络连接失败、会话验证、光影着色器失败、存档/区块损坏',
+          '**原因分级**：崩溃报告里命中的标「确定原因」，只在日志里命中的标「疑似原因」，不再一锅端',
+          '**没崩溃也有结论**：无报告时分析日志里的 ERROR 行；干净日志直接显示「日志干净」'
+        ]
+      }
+    ]
+  },
   {
     version: '1.2-rc3',
     date: '2026-10-25',
@@ -10500,9 +10641,14 @@ ipcMain.handle('diag:launcher', () => {
     return { ok: true, crashes: files.filter(f => f.time < bootAt).slice(0, 10), diagDir: DIAG_DIR };
   } catch (e) { return { ok: false, error: e.message, crashes: [] }; }
 });
+ipcMain.handle('diag:reports', (_e, p) => {
+  try {
+    return { ok: true, reports: listCrashReports(config.gameDir, p && p.instance) };
+  } catch (e) { return { ok: false, error: e.message, reports: [] }; }
+});
 ipcMain.handle('diag:game', async (_e, p) => {
   try {
-    return { ok: true, diag: await diagnoseGameCrash(config.gameDir, p && p.instance) };
+    return { ok: true, diag: await diagnoseGameCrash(config.gameDir, p && p.instance, p && p.report, !!(p && p.logOnly)) };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('diag:ai', async (_e, p) => {

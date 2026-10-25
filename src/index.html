@@ -1011,10 +1011,16 @@
             <span>实例</span>
             <select id="diagInstance"></select>
           </div>
-          <div class="row" style="display:flex;gap:8px;margin:10px 0;">
-            <button class="btn primary" id="btnDiagGame"><svg class="ic sm"><use href="#i-pulse"/></svg> 诊断最近一次崩溃</button>
+          <div class="field-line">
+            <span>崩溃报告</span>
+            <select id="diagReport"></select>
           </div>
-          <div id="diagGameOut"><div class="empty-sm">游戏异常退出时会自动跳转到这里分析；也可以手动点上面的按钮。</div></div>
+          <div class="row" style="display:flex;gap:8px;margin:10px 0;">
+            <button class="btn primary" id="btnDiagGame"><svg class="ic sm"><use href="#i-pulse"/></svg> 诊断所选崩溃</button>
+            <button class="btn" id="btnDiagLog"><svg class="ic sm"><use href="#i-pulse"/></svg> 只分析游戏日志</button>
+            <button class="btn ghost" id="btnDiagRefresh"><svg class="ic sm"><use href="#i-refresh"/></svg> 刷新列表</button>
+          </div>
+          <div id="diagGameOut"><div class="empty-sm">游戏异常退出时会自动跳转到这里分析；也可以手动选一份崩溃报告诊断（不限发生时间）。</div></div>
         </div>
 
         <div class="card set-card">

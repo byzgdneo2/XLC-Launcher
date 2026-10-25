@@ -306,6 +306,7 @@ function gotoPage(name) {
     di.innerHTML = S.installed.map(v => '<option value="' + esc(v.id) + '">' + esc(v.id) + '</option>').join('') +
       '<option value="">（全局 .minecraft）</option>';
     if (prev && S.installed.some(v => v.id === prev)) di.value = prev;
+    loadDiagReports();
     refreshDiagLauncher();
   }
   if (name === 'mp') mpOnEnter(); else mpStopPolling();
@@ -5114,38 +5115,76 @@ $('#btnDlJava').addEventListener('click', async () => {
 
 /* ---------------- 诊断页 ---------------- */
 S.lastDiag = null;
+async function loadDiagReports() {
+  const sel = $('#diagReport');
+  const instance = $('#diagInstance').value || '';
+  const r = await window.lmc.diagReports({ instance });
+  sel.innerHTML = '';
+  S.diagReports = (r.ok && r.reports) || [];
+  if (!S.diagReports.length) {
+    sel.innerHTML = '<option value="">（没有崩溃报告 —— 只分析游戏日志）</option>';
+    return;
+  }
+  sel.innerHTML = S.diagReports.map((rp, i) =>
+    '<option value="' + esc(rp.path) + '">' + (i === 0 ? '〔最新〕' : '') +
+    new Date(rp.time).toLocaleString() + ' · ' + esc(rp.headline) + '</option>').join('');
+  sel.value = S.diagReports[0].path;
+}
+function tierLabel(t) { return t === 'sure' ? '确定原因' : '疑似原因'; }
 function renderDiagResult(dg) {
   const box = $('#diagGameOut');
-  if (!dg.found) { box.innerHTML = '<div class="empty-sm">' + esc(dg.note || '最近没有新的崩溃报告。') + '</div>'; return; }
+  if (!dg.found) { box.innerHTML = '<div class="empty-sm">' + esc(dg.note || '没有可分析的崩溃报告或游戏日志。') + '</div>'; return; }
+  if (dg.clean) {
+    box.innerHTML = '<div class="diag-verdict"><span class="pill release">日志干净</span> <b>游戏日志里没有发现错误</b> —— 游戏应该是正常退出或还没启动过。</div>' +
+      '<div class="diag-src"><div>游戏日志: <code>' + esc(dg.logPath || '') + '</code></div></div>';
+    return;
+  }
   const pills = [
-    dg.reportFresh ? '<span class="pill release">有崩溃报告</span>' : '',
-    dg.logFresh ? '<span class="pill old_beta">有游戏日志</span>' : ''
+    dg.reportFresh ? '<span class="pill release">崩溃报告 · 刚刚发生</span>'
+      : (dg.reportPath ? '<span class="pill old_beta">崩溃报告 · ' + new Date(S.lastDiagTime || 0).toLocaleString() + '</span>' : ''),
+    dg.logFresh ? '<span class="pill old_beta">游戏日志 · 新鲜</span>' : ''
   ].filter(Boolean).join(' ');
-  let html = '<div class="diag-verdict">' + pills +
-    (dg.rules.length
-      ? ' <b>识别出 ' + dg.rules.length + ' 个可能原因：</b>'
-      : ' <b>内置规则未识别出确定原因</b>（可用下方 AI 深度分析）') + '</div>';
+  let html = '<div class="diag-verdict">' + pills;
+  if (dg.headline) html += '<div class="diag-headline"><code>' + esc(dg.headline) + '</code></div>';
+  const sure = dg.rules.filter(r => r.tier === 'sure').length;
+  html += sure
+    ? ' <b>识别出 ' + sure + ' 个确定原因' + (dg.rules.length - sure ? '（另有 ' + (dg.rules.length - sure) + ' 个疑似）' : '') + '：</b>'
+    : (dg.rules.length ? ' <b>疑似原因 ' + dg.rules.length + ' 个（来自日志，非崩溃报告直接命中）：</b>'
+      : (dg.logOnly ? ' <b>日志里没有命中内置规则</b>（可用下方 AI 深度分析）' : ' <b>崩溃报告未命中内置规则</b>（可用下方 AI 深度分析）'));
+  html += '</div>';
   dg.rules.forEach((r, i) => {
-    html += '<div class="diag-rule"><div class="diag-rule-t">' + (i + 1) + '. ' + esc(r.title) + '</div>' +
+    html += '<div class="diag-rule"><div class="diag-rule-t">' + (i + 1) + '. ' + esc(r.title) +
+      ' <span class="pill ' + (r.tier === 'sure' ? 'release' : 'old_beta') + '">' + tierLabel(r.tier) + ' · ' + esc(r.src) + '</span></div>' +
       '<div class="diag-rule-b"><b>原因：</b>' + esc(r.why) + '</div>' +
       '<div class="diag-rule-b"><b>建议：</b>' + esc(r.fix) + '</div>' +
       '<div class="diag-rule-m">匹配到: ' + esc(r.match) + '</div></div>';
   });
+  if (dg.causedBy && dg.causedBy.length) {
+    html += '<div class="diag-rule"><div class="diag-rule-t">异常链（Caused by）</div>' +
+      dg.causedBy.map(c => '<div class="diag-rule-m"><code>' + esc(c) + '</code></div>').join('') + '</div>';
+  }
   if (dg.javaNeed) html += '<div class="warnbar tip">需要 Java ' + dg.javaNeed + ' —— 启动该版本时会自动下载安装；也可到「设置 → Java 运行时」手动装或指定路径。</div>';
   if (dg.modsInvolved.length) html += '<div class="diag-rule-b"><b>涉及的 MOD：</b>' + dg.modsInvolved.map(esc).join('、') + '</div>';
+  if (dg.evidence && dg.evidence.length) {
+    html += '<details class="diag-evidence"><summary>关键日志行（' + dg.evidence.length + ' 行）</summary>' +
+      dg.evidence.map(l => '<div class="diag-rule-m"><code>' + esc(l) + '</code></div>').join('') + '</details>';
+  }
   html += '<div class="diag-src">';
-  if (dg.reportPath) html += '<div>崩溃报告: <code>' + esc(dg.reportPath) + '</code></div>';
+  if (dg.reportPath) html += '<div>崩溃报告: <code>' + esc(dg.reportPath) + '</code>' + (dg.reportFresh ? '' : '（历史报告，已照常分析）') + '</div>';
   if (dg.logPath) html += '<div>游戏日志: <code>' + esc(dg.logPath) + '</code></div>';
   html += '</div>';
   box.innerHTML = html;
 }
-async function runGameDiag() {
+async function runGameDiag(logOnly) {
   const box = $('#diagGameOut');
-  box.innerHTML = '<div class="empty-sm">正在分析崩溃报告…</div>';
+  box.innerHTML = '<div class="empty-sm">正在分析…</div>';
   const instance = $('#diagInstance').value || '';
-  const r = await window.lmc.diagGame({ instance });
+  const report = logOnly ? '' : ($('#diagReport') ? $('#diagReport').value : '');
+  const r = await window.lmc.diagGame({ instance, report, logOnly: !!logOnly });
   if (!r.ok) { box.innerHTML = '<div class="empty-sm">诊断失败: ' + esc(r.error) + '</div>'; return; }
   S.lastDiag = r.diag;
+  const rec = (S.diagReports || []).find(x => x.path === (r.diag.reportPath || ''));
+  S.lastDiagTime = rec ? rec.time : 0;
   renderDiagResult(r.diag);
 }
 async function refreshDiagLauncher() {
@@ -5158,7 +5197,10 @@ async function refreshDiagLauncher() {
     '<button class="btn ghost diag-open-file" data-f="' + esc(c.path) + '">查看</button></div>').join('');
   box.querySelectorAll('.diag-open-file').forEach(b => b.addEventListener('click', () => window.lmc.openPath(b.dataset.f)));
 }
-$('#btnDiagGame').addEventListener('click', runGameDiag);
+$('#btnDiagGame').addEventListener('click', () => runGameDiag(false));
+$('#btnDiagLog').addEventListener('click', () => runGameDiag(true));
+$('#btnDiagRefresh').addEventListener('click', () => { loadDiagReports(); toast('崩溃报告列表已刷新'); });
+$('#diagInstance').addEventListener('change', loadDiagReports);
 $('#btnDiagOpenDir').addEventListener('click', async () => {
   const r = await window.lmc.diagLauncher();
   if (r.ok && r.diagDir) window.lmc.openPath(r.diagDir);
