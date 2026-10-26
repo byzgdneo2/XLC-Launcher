@@ -2168,13 +2168,19 @@ $('#btnSaveSettings').addEventListener('click', async () => {
 });
 /* 版本更新：检测 / 打开下载页 / 自动检测开关（更新源已锁定，设置页只读展示） */
 $('#btnCheckUpdate').addEventListener('click', () => { UPD.autoTried = true; checkUpdateNow(false); });
+/* 「打开下载页」一律打开官网下载页：
+   即使这次检测走的是 GitHub（pageUrl 是 Release 页面），也不把用户导到 GitHub 去 ——
+   官网下载页才是对外的分发口，页面上列着各版本与网盘直链。 */
+function updateOpenPageUrl() {
+  return (S.config && S.config.updateDefaultUrl) || (UPD.info && UPD.info.pageUrl) || '';
+}
 $('#btnUpdOpenPage').addEventListener('click', () => {
-  const u = (UPD.info && UPD.info.pageUrl) || (S.config && S.config.updateDefaultUrl) || '';
-  if (!u) { toast('更新源地址缺失', 'warn'); return; }
+  const u = updateOpenPageUrl();
+  if (!u) { toast('下载页地址缺失', 'warn'); return; }
   window.lmc.openUrl(u).catch(() => toast('无法打开下载页', 'error'));
 });
-/* 更新检测地址已锁定为官方下载页：输入框只读，主进程也会拒绝任何非官方地址。
-   这里只做一层界面兜底 —— 万一有人用改 DOM 的方式试图写入，直接回弹官方地址。 */
+/* 更新检测地址：1.2 起界面上不再显示这一行（内置并锁定，GitHub Releases 优先、官方下载页兜底），
+   但输入框仍保留在 DOM 里做兜底：主进程会拒绝任何非官方地址，这里万一被改 DOM 写入也回弹官方地址。 */
 function lockUpdateUrlField() {
   const el = $('#setUpdateUrl');
   if (!el) return;
@@ -2277,6 +2283,7 @@ function pickModInstance() {
 }
 function setupResPage(cfg) {
   let query = '', timer = null, page = 1, total = 0, fallback = false;
+  let composing = false, seq = 0;
   /* MOD 页可切换下载源：modrinth | curseforge | all（综合 = 两源合并，按下载量降序）
      默认值直接读 HTML 上带 .active 的按钮（当前是「综合」），避免两处写死互相失配 */
   let source = (function () {
@@ -2303,10 +2310,25 @@ function setupResPage(cfg) {
   const TYPE_ICON = { mod: 'i-puzzle', modpack: 'i-package', resourcepack: 'i-box', shader: 'i-shader', datapack: 'i-sq' };
   const typeName = TYPE_NAME[cfg.type] || cfg.type;
   const box = $(cfg.list);
-  $(cfg.search).addEventListener('input', () => {
-    query = $(cfg.search).value.trim();
+  const inputEl = $(cfg.search);
+  /* 输入法正在组合（拼音 / 五笔还没选出汉字）时不发请求：那会儿 value 里只有拼音或半个字，
+     搜出去必然是 0 条；提交（compositionend）后立刻再搜一次，保证「打完字一定会搜」。
+     ——「输入中文后列表没反应」的元凶就是这个：搜的是半成品，正确那次又被旧回包盖掉。 */
+  const kick = () => {
+    query = inputEl.value.trim();
     clearTimeout(timer);
     timer = setTimeout(newSearch, 350);
+  };
+  inputEl.addEventListener('compositionstart', () => { composing = true; });
+  inputEl.addEventListener('compositionend', () => { composing = false; kick(); });
+  inputEl.addEventListener('input', () => { if (!composing) kick(); });
+  /* 回车立即搜，不必等防抖（输入法组合中的回车是「选字」，不能抢） */
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || composing) return;
+    e.preventDefault();
+    query = inputEl.value.trim();
+    clearTimeout(timer);
+    newSearch();
   });
   if (cfg.targetSel) $(cfg.targetSel).addEventListener('change', () => newSearch());
   function newSearch() { page = 1; fallback = false; search(); }
@@ -2333,18 +2355,23 @@ function setupResPage(cfg) {
     };
   }
   async function search(forceAll) {
+    const my = ++seq;                     /* 只认最后一次搜索的回包：旧请求晚回来不许覆盖新结果 */
+    const q = query;                      /* 钉住本次查询词（await 期间用户可能继续打字） */
+    const qHasZh = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(q);
     box.innerHTML = '<div class="empty-sm">正在搜索 ' + esc(srcText()) + '…</div>';
     const ti = targetInfo();
     let r = await window.lmc.modrinthSearch({
-      query, type: cfg.type, source,
+      query: q, type: cfg.type, source,
       mcVersion: forceAll ? '' : ti.mc,
       loader: forceAll ? '' : ti.ld,
       page
     });
+    if (my !== seq) return;
     let fallbackNote = '';
     // 当前版本社区暂无适配资源时，自动回退展示全站热门，安装时再严格校验
     if (r.ok && !r.hits.length && !forceAll && !fallback && (ti.mc || ti.ld)) {
-      r = await window.lmc.modrinthSearch({ query, type: cfg.type, source, mcVersion: '', loader: '', page: 1 });
+      r = await window.lmc.modrinthSearch({ query: q, type: cfg.type, source, mcVersion: '', loader: '', page: 1 });
+      if (my !== seq) return;
       fallback = true; page = 1;
       fallbackNote = esc(srcText()) + ' 暂无适配 <b>' + esc(ti.mc || '该版本') + '</b>' +
         (ti.ld ? ' (' + esc(ti.ld) + ')' : '') + ' 的' + typeName +
@@ -2362,7 +2389,18 @@ function setupResPage(cfg) {
     total = r.total || 0;
     box.innerHTML = '';
     if (fallbackNote) box.appendChild(el('div', 'warnbar tip res-note', '⚠ ' + fallbackNote));
-    if (!r.hits.length) { box.innerHTML += '<div class="empty-sm">没有匹配的资源</div>'; renderPager(); return; }
+    /* 中文查询走的是「词库 / 在线翻译」得到的英文关键词，让用户看得见实际搜的是什么，
+       免得以为「明明搜了这个词，出来的却是别的」 */
+    if (qHasZh && r.zhQuery) box.appendChild(el('div', 'res-zhnote', '中文「' + esc(q) + '」→ 按关键词 ' + esc(r.zhQuery) + ' 搜索'));
+    if (!r.hits.length) {
+      /* 中文词既没进词库、也没翻出可用英文名：直说「没搜到」并给建议，
+         绝不能让上游的「全站热门」冒充搜索结果（那会看着像搜索没生效） */
+      box.innerHTML += r.zhMiss
+        ? '<div class="empty-sm">没找到与「' + esc(q) + '」相关的内容。<br>' +
+          '这个词不在内置中文词库里，也没能翻译出对应的英文名 —— 换个更完整的说法（如「小地图」），或者直接输入英文名试试。</div>'
+        : '<div class="empty-sm">没有匹配的资源</div>';
+      renderPager(); return;
+    }
     r.hits.forEach(h => {
       /* PCL 式标题区：主标题 + 原名/版次副标题（副标题灰字小号，同行换行显示） */
       const mainTitle = esc(h.titleMain || dispTitle(h.titleZh, h.title));
@@ -7093,10 +7131,10 @@ function renderUpdateResult(info) {
   if (info.ok === false) {
     setUpdState('err', '检测失败');
     box.innerHTML = '<div class="upd-box"><b>检测更新失败</b><p>' + esc(info.error || '未知错误') +
-      '</p><p>可以点「打开下载页」手动查看最新版本。更新源已锁定为官方下载页（不可修改），' +
+      '</p><p>可以点「打开下载页」手动查看最新版本。更新源为 GitHub Releases（优先）与官方下载页（备用），' +
       (info.locked
         ? '本次请求用的是非官方地址，已被启动器拒绝。'
-        : '若长期检测失败，可能是网络不通或官方页面暂时不可用，稍后再试。') +
+        : '两条通道都暂时连不上，可能是网络不通，稍后再试。') +
       '</p></div>';
     return;
   }
@@ -7105,7 +7143,7 @@ function renderUpdateResult(info) {
     setUpdState('ok', '已跳过快照版 ' + info.latest);
     box.innerHTML = '<div class="upd-box"><b>更新源上的 ' + esc(info.latest) + ' 是快照 / 预发布版，已按设置跳过</b>' +
       '<p>你在「设置 → 版本更新」里开启了<b>跳过快照版更新</b>，所以这一版不再提示。想尝鲜的话关掉那个开关，再点「检测更新」即可。</p>' +
-      '<p>检测时间：' + fmtTime(info.checkedAt) + '</p></div>';
+      '<p>检测时间：' + fmtTime(info.checkedAt) + (info.via ? ' · 更新来源：' + esc(info.via) : '') + '</p></div>';
     return;
   }
   if (!info.hasUpdate) {
@@ -7114,13 +7152,14 @@ function renderUpdateResult(info) {
       (info.newerThanRemote
         ? '当前版本比更新源上的版本还要新（本地开发版？）。'
         : '更新源上的最新版本是 ' + esc(info.latest) + (info.preRelease ? '（快照 / 预发布版）' : '') + '，与当前版本一致。') +
-      '</p><p>检测时间：' + fmtTime(info.checkedAt) + '</p></div>';
+      '</p><p>检测时间：' + fmtTime(info.checkedAt) + (info.via ? ' · 更新来源：' + esc(info.via) : '') + '</p></div>';
     return;
   }
   setUpdState('new', '发现新版本 ' + info.latest);
   const dls = Array.isArray(info.downloads) ? info.downloads : [];
   let html = '<div class="upd-box new"><b>发现新版本 ' + esc(info.latest) + '（当前 ' + esc(info.current) + '）</b>' +
-    '<p>可以直接在启动器内下载新版本，也可以让浏览器下载；装好后启动器就是新版了。</p>';
+    '<p>可以直接在启动器内下载新版本，也可以让浏览器下载；装好后启动器就是新版了。' +
+    (info.via ? '更新来源：' + esc(info.via) + '。' : '') + '</p>';
   if (info.notes) html += '<div class="upd-notes">' + esc(info.notes) + '</div>';
   if (dls.length) {
     html += dls.map((d, i) => {

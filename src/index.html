@@ -1310,12 +1310,15 @@
               <i class="upd-dot" id="updDot"></i><span id="updStateTx">尚未检测</span>
             </div>
           </div>
-          <div class="field-line">
+          <!-- 更新检测地址：1.2 起不在界面上显示（内置并锁定，优先 GitHub Releases、回退官方下载页）。
+               必须用内联 display:none —— .field-line{display:flex} 会盖掉 hidden 属性。
+               元素保留在 DOM 里：主进程拒绝非官方地址，渲染层 lockUpdateUrlField() 还要用它做兜底。 -->
+          <div class="field-line" id="updUrlRow" style="display:none">
             <span>更新检测地址</span>
-            <input type="text" id="setUpdateUrl" readonly title="更新源已锁定为官方下载页，不可修改">
-            <span class="lock-pill" id="updLockPill" title="更新源已锁定：启动器只从这个官方地址检测更新，任何人都改不了"><svg class="ic sm"><use href="#i-lock"/></svg> 已锁定</span>
+            <input type="text" id="setUpdateUrl" readonly title="更新源内置并锁定，不可修改">
+            <span class="lock-pill" id="updLockPill" title="更新源内置并锁定：优先 GitHub Releases，连不上用官方下载页"><svg class="ic sm"><use href="#i-lock"/></svg> 已锁定</span>
           </div>
-          <p class="hint">更新源已<b>锁定</b>为官方下载页：启动器只从这一个地址读取最新版本（页面里的 <b>XLC-Launcher-&lt;版本&gt;-Setup.exe</b> / <b>-portable.exe</b>）。这样别人即使改了你的配置、或诱导你换成第三方地址，也没法让启动器下载伪造的安装包。</p>
+          <p class="hint">更新源<b>内置并锁定</b>（界面上不显示、也不允许改）：优先从 <b>GitHub Releases</b> 读取最新版本与安装包，连不上时自动回退到官方下载页，结果里会写明这次用的是哪个来源。这样别人即使改了你的配置、或诱导你换成第三方地址，也没法让启动器下载伪造的安装包。</p>
           <label class="check-row">
             <input type="checkbox" id="setAutoUpd" checked>
             <span>启动时自动检测更新（发现新版本时提示）</span>

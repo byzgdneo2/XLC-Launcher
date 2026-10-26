@@ -746,7 +746,8 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 .md-gallery{ display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; margin:10px 0; }
 .md-gallery img{ width:100%; border-radius:10px; border:1px solid rgba(255,255,255,.08); display:block; }
 .md-html{ max-height:340px; overflow-y:auto; font-size:13px; line-height:1.7; color:var(--tx); padding-right:6px; margin-top:10px; }
-.md-html img{ max-width:100%; border-radius:8px; }
+.md-html img{ max-width:100%; border-radius:8px; margin:6px 0; }
+.md-html hr{ border:0; border-top:1px solid rgba(255,255,255,.12); margin:12px 0; }
 .md-html h1,.md-html h2,.md-html h3,.md-html h4{ font-size:15px; margin:14px 0 6px; }
 .md-html p{ margin:8px 0; }
 .md-html ul,.md-html ol{ padding-left:22px; margin:8px 0; }
@@ -783,6 +784,9 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 .modal-name input{ width:100%; box-sizing:border-box; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.09); border-radius:9px; color:var(--tx); padding:9px 12px; font-size:13px; outline:none; }
 .modal-name input:focus{ border-color:var(--acc); }
 .res-note{ margin: 0 0 10px; }
+/* 中文查询实际用的是哪个英文关键词（内置词库 / 在线翻译得来）：一行小字，不抢版面 */
+.res-zhnote{ margin:0 0 8px; padding:5px 10px; font-size:12px; color:var(--tx2); line-height:1.5;
+  background:rgba(122,162,247,.08); border:1px solid rgba(122,162,247,.22); border-radius:7px; }
 .pager{ display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:6px; padding:14px 0 4px; }
 .pager .btn{ min-width:34px; height:30px; padding:0 10px; font-size:12.5px; }
 .pager .btn:disabled{ opacity:.4; cursor:default; }

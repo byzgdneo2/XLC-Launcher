@@ -139,7 +139,7 @@ try {
    → 1.1-snapshot1 → 1.1-snapshot2 → 1.1-pre1 → 1.1-rc1 → **1.1（1.1 正式版：设置页照 PCL 分类、
    离线皮肤改用标准的本地签名 Yggdrasil 服务、版本列表方块图标、修复启动后窗口消失）**
    → **1.2-snapshot2（1.2 第二个快照：可见性默认改「保持显示」+ 老配置迁移、快照版专用 UI 回归、账户设置、存档预览实时检测、插件读写设置 control、极速模式）**
-   → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**→ 1.2-rc4（游戏诊断 v2：崩溃报告可选可析、规则 25 条、不限日志新旧）
+   → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**→ 1.2-rc4（游戏诊断 v2：崩溃报告可选可析、规则 25 条、不限日志新旧）→ **1.2（正式版：诊断 v2 / 反馈入口转正 + 更新源 GitHub 优先、官网兜底）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -148,7 +148,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.2-rc4';
+const APP_VERSION = '1.2';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -824,6 +824,11 @@ ipcMain.handle('mods:update', async (_e, p) => {
  *   · **没有启用 / 禁用** —— 资源包与光影由游戏内「选项 → 资源包 / 光影」选择，PCL 也是把 ED 按钮隐藏的
  * 我们的实现与 PCL 独立（行为对齐）：包信息本地解析 + sha1 匹配 Modrinth 拿在线名称/简介/图标，可更新复用 MOD 的
  * muPickLatest（src/modupd-core.js）。 */
+/* Modrinth 的项目描述是 Markdown：详情弹窗里必须先转成 HTML，否则 ![图](url)、**粗体**、
+   列表符号会当纯文本原样露出来（src/md-core.js，纯函数、有单测） */
+const { mdToHtml } = require('./src/md-core');
+/* 中文搜索词的译文清洗（纯函数，单测在 qa/search-zh-unit.js） */
+const { hasCJK, enKeywordsFromTranslation } = require('./src/search-zh');
 const RES_ZIP = require('./zipio');
 const RES_ST = { key: '', res: null, at: 0 };
 function resourcepacksDirFor(instance) {
@@ -2522,7 +2527,7 @@ ipcMain.handle('modrinth:detail', async (_e, p) => {
       const typePath = { mod: 'mod', shader: 'shader', resourcepack: 'resourcepack', datapack: 'datapack', modpack: 'modpack' }[prType] || 'mod';
       out.pageUrl = pr.slug ? 'https://modrinth.com/' + typePath + '/' + pr.slug : '';
       out.sourceUrl = pr.source_url || '';
-      out.descHtml = sanitizeHtml(pr.body || '');
+      out.descHtml = sanitizeHtml(mdToHtml(pr.body || ''));
       out.downloads = pr.downloads || 0;
       out.tags = (pr.categories || []).map(catZh).slice(0, 4);
       out.icon = await fetchIconData(pr.icon_url || '', p.projectId, 4 * 1024 * 1024);
@@ -3016,6 +3021,36 @@ function toSearchKeywords(q) {
   const uniq = [...new Set(list.map(s => String(s).trim().toLowerCase()).filter(Boolean))].slice(0, 3);
   return uniq.length ? uniq : null;
 }
+/* 词库没收录的中文词 → 在线翻译兜底（钠 → Sodium、小地图 → mini map）。
+ * 为什么必须有这一步：中文查询原样发给上游等于「没搜索」——
+ *   · Modrinth 对单字中文基本 0 条；
+ *   · CurseForge 会把不认识的 CJK 串当**空条件**，返回全站下载量前 100 名
+ *     （实测 searchFilter=钅 → totalCount=10000，头几条是 JEI / Mouse Tweaks / AppleSkin），
+ *     「综合」源合并后屏幕上就只剩一堆不相干的热门，用户以为搜索没生效。
+ * 译文还会过一遍 src/search-zh.js 的清洗：生僻字常被翻成垃圾（钅 → ư），判不出就返回 null。 */
+const ZH_TR_CACHE = new Map();          /* 中文查询 → { kws, at } */
+const ZH_TR_TTL = 30 * 60 * 1000;
+async function translateZhKeywords(q) {
+  const s = String(q || '').trim();
+  if (!hasCJK(s) || s.length > 40) return null;     /* 纯英文 / 长句不翻（避免误伤） */
+  const c = ZH_TR_CACHE.get(s);
+  if (c && Date.now() - c.at < ZH_TR_TTL) return c.kws;
+  let kws = null;
+  try {
+    const url = 'https://api.mymemory.translated.net/get?langpair=zh-CN%7Cen&mt=1&de=' +
+      encodeURIComponent(TR_CONTACT) + '&q=' + encodeURIComponent(s);
+    const res = await fetch(url, { headers: { 'User-Agent': mrUA() }, signal: AbortSignal.timeout(5000) });
+    const j = JSON.parse(Buffer.from(await res.arrayBuffer()).toString('utf8'));
+    kws = enKeywordsFromTranslation(s, (j && j.responseData || {}).translatedText);
+  } catch (_) { kws = null; }        /* 翻译不可用就当没有，绝不阻断搜索本身 */
+  if (ZH_TR_CACHE.size > 300) ZH_TR_CACHE.clear();
+  ZH_TR_CACHE.set(s, { kws, at: Date.now() });
+  return kws;
+}
+/* 统一入口：内置词库优先（快且准），没收录再翻译 */
+async function resolveKeywords(q) {
+  return toSearchKeywords(q) || await translateZhKeywords(q);
+}
 /* 英文关键词按 relevance 查询，合并去重（保持首词结果在前） */
 async function mrSearchByKeywords(kws, type, mcVersion, loader, limit) {
   const facets = [['project_type:' + (MR_TYPES.includes(type) ? type : 'mod')]];
@@ -3038,7 +3073,7 @@ async function mrSearchByKeywords(kws, type, mcVersion, loader, limit) {
 async function modrinthSearchInner(query, type, mcVersion, loader, page) {
   const PAGE_SIZE = 20;
   const p = Math.max(1, parseInt(page, 10) || 1);
-  const kws = toSearchKeywords(query); /* 中文检索词 → 英文关键词数组 */
+  const kws = await resolveKeywords(query); /* 中文检索词 → 英文关键词数组（词库 → 在线翻译） */
   let rawHits = null, total = 0;
   if (kws) {
     /* 中文搜索：逐关键词查询后合并去重（每词取 PAGE_SIZE 条，保证翻页有料） */
@@ -3064,7 +3099,7 @@ async function modrinthSearchInner(query, type, mcVersion, loader, page) {
   // 图标并发转 base64（runPool：6 并发，单图 6s 超时，失败留空走 SVG 占位）
   await decorateHits(hits, false);
   if (kws) total = hits.length + (p - 1) * PAGE_SIZE;
-  return { hits, total, zhQuery: kws ? kws.join(' / ') : '' };
+  return { hits, total, zhQuery: kws ? kws.join(' / ') : '', zhMiss: !kws && hasCJK(query) };
 }
 /* ---------------- CurseForge 源（MCIM 镜像代理 /curseforge，免 API key） ----------------
  * 官方 api.curseforge.com 需要 key；MCIM 镜像提供免 key 代理，转发 /v1 全部端点 */
@@ -3087,7 +3122,11 @@ async function cfJson(p) {
 async function curseforgeSearchInner(query, type, mcVersion, loader, page) {
   const PAGE_SIZE = 20;
   const p = Math.max(1, parseInt(page, 10) || 1);
-  const kws = toSearchKeywords(query);
+  const kws = await resolveKeywords(query);
+  /* CF 不支持中文检索：不认识的 CJK 串会被当「空条件」，返回全站下载量最高的前 100 名
+     （实测 searchFilter=钅 → totalCount=10000，头几条是 JEI / Mouse Tweaks），
+     界面看起来和「没搜索」完全一样。所以中文没解析出英文词时直接按 0 条处理。 */
+  if (!kws && hasCJK(query)) return { hits: [], total: 0, zhQuery: '', zhMiss: true };
   /* CF 的 searchFilter 是整串匹配（不做 OR），多词拼接会 0 结果 → 只取最相关的一个关键词 */
   const cfQuery = kws ? (kws.slice().sort((a, b) => b.length - a.length)[0]) : (query || '');
   const qs = new URLSearchParams({
@@ -3108,7 +3147,7 @@ async function curseforgeSearchInner(query, type, mcVersion, loader, page) {
   }));
   await decorateHits(hits, true); /* CF 无 MCIM 简介，中文名走内置库 + AI 兜底 */
   const pg = j.pagination || {};
-  return { hits, total: pg.totalCount != null ? pg.totalCount : (j.totalCount || hits.length), zhQuery: kws ? cfQuery : '' };
+  return { hits, total: pg.totalCount != null ? pg.totalCount : (j.totalCount || hits.length), zhQuery: kws ? cfQuery : '', zhMiss: false };
 }
 /* ---------------- 「综合」源：Modrinth + CurseForge 合并，按下载量降序 ----------------
  * 为什么不能「翻页时各取一页再合并」：两个源的下载量量级和排名都不一样，逐页合并会出现
@@ -3119,8 +3158,8 @@ const COMBINED_PAGE = 20;
 const COMBINED_POOL = 100;                 /* 每源预取条数：Modrinth 单次上限 100；CF 每页 50 → 取两次 */
 const COMBINED_TTL = 5 * 60 * 1000;
 const combinedCache = new Map();
-async function modrinthPoolRaw(query, type, mcVersion, loader, limit) {
-  const kws = toSearchKeywords(query);
+async function modrinthPoolRaw(query, type, mcVersion, loader, limit, kwsIn) {
+  const kws = kwsIn === undefined ? await resolveKeywords(query) : kwsIn;
   let raw;
   if (kws) {
     raw = await mrSearchByKeywords(kws, type, mcVersion, loader, limit);
@@ -3137,8 +3176,10 @@ async function modrinthPoolRaw(query, type, mcVersion, loader, limit) {
     downloads: h.downloads, icon: h.icon_url || '', author: h.author || '', src: 'modrinth'
   }));
 }
-async function curseforgePoolRaw(query, type, mcVersion, loader, limit) {
-  const kws = toSearchKeywords(query);
+async function curseforgePoolRaw(query, type, mcVersion, loader, limit, kwsIn) {
+  const kws = kwsIn === undefined ? await resolveKeywords(query) : kwsIn;
+  /* 同 curseforgeSearchInner：CF 会把不认识的 CJK 当空条件返回全站热门，中文无英文词就不查 */
+  if (!kws && hasCJK(query)) return [];
   /* CF 的 searchFilter 是整串匹配（不做 OR），多词只取最相关的一个（与单源模式一致） */
   const cfQuery = kws ? (kws.slice().sort((a, b) => b.length - a.length)[0]) : (query || '');
   const lt = CF_LOADER[(loader || '').toLowerCase()];
@@ -3167,6 +3208,9 @@ async function curseforgePoolRaw(query, type, mcVersion, loader, limit) {
 }
 async function combinedSearchInner(query, type, mcVersion, loader, page) {
   const key = [String(query || '').trim().toLowerCase(), type, mcVersion, loader].join('|');
+  /* 关键词只解析一次（词库 → 翻译，带缓存），两个源共用，避免同一句中文翻两遍 */
+  const kws = await resolveKeywords(query);
+  const zhMiss = !kws && hasCJK(query);
   /* 极速模式（config.turboMode）：缓存条目上限 24→8、保存 5 分钟→2 分钟，降低常驻内存 */
   const turbo = !!config.turboMode;
   const ttl = turbo ? 2 * 60 * 1000 : COMBINED_TTL;
@@ -3174,8 +3218,8 @@ async function combinedSearchInner(query, type, mcVersion, loader, page) {
   let ent = combinedCache.get(key);
   if (!ent || Date.now() - ent.at > ttl) {
     const [mr, cf] = await Promise.all([
-      modrinthPoolRaw(query, type, mcVersion, loader, COMBINED_POOL).catch(() => null),
-      curseforgePoolRaw(query, type, mcVersion, loader, COMBINED_POOL).catch(() => null)
+      modrinthPoolRaw(query, type, mcVersion, loader, COMBINED_POOL, kws).catch(() => null),
+      curseforgePoolRaw(query, type, mcVersion, loader, COMBINED_POOL, kws).catch(() => null)
     ]);
     if (!mr && !cf) throw new Error('Modrinth 与 CurseForge 都连不上（可先切回单个下载源）');
     const seen = new Set();
@@ -3195,7 +3239,7 @@ async function combinedSearchInner(query, type, mcVersion, loader, page) {
     mrHits.length ? decorateHits(mrHits, false) : null,
     cfHits.length ? decorateHits(cfHits, true) : null
   ]);
-  return { hits, total: ent.pool.length };
+  return { hits, total: ent.pool.length, zhQuery: kws ? kws.join(' / ') : '', zhMiss };
 }
 /* CurseForge 文件候选直链：API downloadUrl（edge.forgecdn.net）部分 404，补 mediafilez 拼接回退 */
 function cfFileUrls(file) {
@@ -3233,7 +3277,7 @@ ipcMain.handle('modrinth:search', async (_e, p) => {
       : src === 'all'
         ? await combinedSearchInner(p.query, p.type, p.mcVersion, p.loader, p.page)
         : await modrinthSearchInner(p.query, p.type, p.mcVersion, p.loader, p.page);
-    return { ok: true, hits: r.hits, total: r.total };
+    return { ok: true, hits: r.hits, total: r.total, zhQuery: r.zhQuery || '', zhMiss: !!r.zhMiss };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 /* 按加载器安装 MC 版本（整合包导入共用） */
@@ -9086,17 +9130,23 @@ async function aiDiagnose(excerpt, rules) {
 }
 
 /* ---------------- 版本更新检测 / 自更新 ----------------
- * 更新源 = 开发者自己发布的下载页（默认 UPDATE_DEFAULT_URL）。该页里的
- *   XLC-Launcher-<版本>-Setup.exe / XLC-Launcher-<版本>-portable.exe
- * 就是「最新版本」的权威来源：版本号直接从文件名解析（回退页面文案），
- * 同时解析出下载直链与版本说明。因此开发者只需把新版本传到该站点并替换旧文件，
- * 所有用户的启动器就能自动发现新版本 —— 无需开发者模式，也无需任何额外配置。
- * 更新源若返回 JSON（{version, notes, downloads:[{name,url,size,kind}]}）同样兼容。 */
+ * 更新源（1.2 起）= GitHub Releases 优先、官方下载页兜底：
+ *   ① GitHub Releases（GH_RELEASE_API）：版本、公告、附件全在仓库里，发版即生效；
+ *   ② 官方下载页（UPDATE_DEFAULT_URL）：页面里的 XLC-Launcher-<版本>-Setup.exe /
+ *      XLC-Launcher-<版本>-portable.exe 是权威来源，版本号从文件名解析（回退页面文案），
+ *      同时解析出下载直链与版本说明；返回 JSON（{version, notes, downloads}）同样兼容。
+ * GitHub 连不上（被墙 / 限流 / 超时）时自动回退 ②，用户无感。
+ * 开发态（未打包）可用环境变量 XLC_UPDATE_URL 指向本地调试页 —— 此时跳过 GitHub，
+ * 直接走页面源（保证测试封闭性）。 */
 const UPDATE_DEFAULT_URL = 'https://neo2-pan.app.workbuddy.host/index5.html';
 const UPDATE_TIMEOUT = 20000;
+const GH_RELEASE_API = 'https://api.github.com/repos/byzgdneo2/XLC-Launcher/releases/latest';
+/* 给「打开下载页」用的人类可读地址：API 端点返回的是 JSON，不能让用户点开看一坨数据 */
+const GH_RELEASE_PAGE = 'https://github.com/byzgdneo2/XLC-Launcher/releases/latest';
+const GH_UPDATE_TIMEOUT = 12000;
 /* ---------------- 更新源锁定（安全） ----------------
- * 只认内置的官方下载页。早期版本允许在设置里自定义更新源（config.updateUrl），
- * 这里从本版起一律忽略 —— 否则别人改一下配置文件、或诱导用户在设置页换个地址，
+ * 只认内置的官方源（GitHub Releases + 官方下载页）。早期版本允许在设置里自定义更新源
+ * （config.updateUrl），这里一律忽略 —— 否则别人改一下配置文件、或诱导用户在设置页换个地址，
  * 就能让启动器从伪造页面读取「新版本」，进而下载并运行任意 exe 覆盖启动器。
  * 唯一例外：开发态（未打包）可以用环境变量 XLC_UPDATE_URL 指向本地调试页。 */
 function updateSourceUrl() {
@@ -9110,14 +9160,18 @@ function updateSourceUrl() {
 function isOfficialSource(u) {
   const s = String(u || '').trim();
   if (!s) return true;
-  return s === updateSourceUrl() || s === UPDATE_DEFAULT_URL;
+  return s === updateSourceUrl() || s === UPDATE_DEFAULT_URL || s === GH_RELEASE_API;
 }
-/* 更新包只允许从更新源所在主机下载（防下载阶段被换成第三方地址） */
+/* 更新包只允许从官方更新源所在主机下载（防下载阶段被换成第三方地址）。
+   GitHub 直链（github.com/…/releases/download/…）会 302 到附件域，一并放行。 */
 function updateHostAllowed(u) {
   try {
     const host = new URL(String(u)).hostname.toLowerCase();
     const allow = new Set([new URL(updateSourceUrl()).hostname.toLowerCase()]);
     if (!app.isPackaged) { allow.add('127.0.0.1'); allow.add('localhost'); }
+    allow.add('github.com');
+    allow.add('objects.githubusercontent.com');
+    allow.add('release-assets.githubusercontent.com');
     return allow.has(host);
   } catch (_) { return false; }
 }
@@ -9181,6 +9235,16 @@ function preUpdateDecision(remoteVer, skipEnabled) {
 /* 相对链接 → 绝对 URL（更新页里的下载直链是相对路径，如 pan/xlc-launcher/xxx.exe） */
 function absUrl(u, base) {
   try { return new URL(String(u), base).href; } catch (_) { return String(u || ''); }
+}
+/* 官方网盘的下载目录：版本回退一律从这里下 —— 官网是唯一的分发口，
+   不从 GitHub 附件下（GitHub 只负责「发现版本 / 读公告」） */
+const OFFICIAL_PAN_BASE = absUrl('pan/xlc-launcher/', UPDATE_DEFAULT_URL);
+function officialDlUrl(name) {
+  const n = String(name || '').trim();
+  return n ? OFFICIAL_PAN_BASE + encodeURIComponent(n) : OFFICIAL_PAN_BASE;
+}
+function isOfficialPanUrl(u) {
+  return /^https:\/\/neo2-pan\.app\.workbuddy\.host\//i.test(String(u || ''));
 }
 function stripTags(s) {
   return String(s || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&')
@@ -9262,6 +9326,48 @@ function parseUpdatePage(body, pageUrl) {
   return out;
 }
 
+/* 字节数 → 人读尺寸（GitHub Release 附件 size 是字节数） */
+function humanSize(n) {
+  const b = Number(n);
+  if (!isFinite(b) || b <= 0) return '';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, v = b;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i ? v.toFixed(1) : String(v)) + ' ' + u[i];
+}
+/* 解析 GitHub Releases（/releases/latest 响应）为与 parseUpdatePage 同形的更新档案。
+   - 版本 = tag_name 去掉开头的 v（v1.2-rc4 → 1.2-rc4）；
+   - notes = release body 去 HTML 片段；
+   - downloads = exe 附件（浏览器直链 + 字节数 + 可选 digest sha256）；
+   - /releases/latest 本身就跳过 draft 与 prerelease，rc 候选不会抢在正式版前面。
+   （纯函数，便于离线自测。） */
+function parseGitHubRelease(j) {
+  const out = { version: '', notes: '', downloads: [], pageUrl: GH_RELEASE_PAGE };
+  if (!j || typeof j !== 'object') return out;
+  /* 「打开下载页」要落到人类可读的 Release 页面（API 端点只会甩一坨 JSON）；
+     只认 github.com 的 html_url，防止被伪造 JSON 引导到别处 */
+  const hu = String(j.html_url || '');
+  if (/^https:\/\/github\.com\//i.test(hu)) out.pageUrl = hu;
+  out.version = String(j.tag_name || '').replace(/^v/i, '').trim();
+  if (!out.version) out.version = String(j.name || '').trim();
+  out.notes = stripTags(j.body || '').slice(0, 800);
+  for (const a of (Array.isArray(j.assets) ? j.assets : [])) {
+    const name = String((a && a.name) || '').trim();
+    if (!/\.exe$/i.test(name)) continue;
+    const kind = /portable/i.test(name) ? '便携版' : /setup|install/i.test(name) ? '安装版' : '';
+    const dg = String((a && a.digest) || '');
+    out.downloads.push({
+      name,
+      url: String((a && a.browser_download_url) || ''),
+      kind,
+      size: humanSize(a && a.size),
+      version: verFromFileName(name),
+      sha256: /^sha256:[a-fA-F0-9]{64}$/.test(dg) ? dg.slice(7).toLowerCase() : ''
+    });
+  }
+  return out;
+}
+
 /* 更新源上的「版本档案」（纯函数）：把解析出的下载直链按版本归组，倒序排好，
    并标出每一版与当前版本的关系 —— 界面据此做「回退到历史任意版本」。
    relation：newer=比当前新（走更新流程）、same=正在用的这一版、older=比当前旧（可回退）。
@@ -9277,7 +9383,10 @@ function buildUpdateHistory(downloads, current) {
     if (!map.has(key)) map.set(key, { version: v, pre: isPreVer(v), downloads: [] });
     const item = map.get(key);
     if (!item.downloads.some(x => x.name === d.name)) {
-      item.downloads.push({ name: d.name, url: d.url, kind: d.kind || '' });
+      /* 直链统一归到官网网盘：页面源解析出来的本来就是官网直链（原样保留，页面换目录也不受影响），
+         GitHub 附件直链一律换成官网地址 —— 「版本回退」只能从官网下载。 */
+      const u = String(d.url || '');
+      item.downloads.push({ name: d.name, url: isOfficialPanUrl(u) ? u : officialDlUrl(d.name), kind: d.kind || '' });
     }
   }
   const list = Array.from(map.values());
@@ -9426,6 +9535,33 @@ function updateParserSelfTest() {
   ok(hist[0].downloads.length === 2 && /portable/i.test(hist[0].downloads[0].name),
     'T16l 同一版本的便携版 exe 排在安装版前面（回退用免安装 exe，不跑安装向导）',
     hist[0].downloads.map(d => d.name).join(' | '));
+  /* GitHub Releases 解析（1.2 起更新源通道一）：tag / 附件 / 字节尺寸 / digest / notes */
+  const gh = parseGitHubRelease({
+    tag_name: 'v' + HI,
+    body: '**标题**\n\n- 条目一 <b>加粗</b>',
+    assets: [
+      { name: 'XLC-Launcher-' + HI + '-portable.exe', browser_download_url: 'https://github.com/byzgdneo2/XLC-Launcher/releases/download/v' + HI + '/XLC-Launcher-' + HI + '-portable.exe', size: 75546420, digest: 'sha256:' + 'a'.repeat(64) },
+      { name: 'Source code (zip)', browser_download_url: 'https://github.com/x/x/zip' }
+    ]
+  });
+  ok(gh.version === HI, 'T16m GitHub Release 从 tag 解析版本（去 v 前缀）', gh.version);
+  ok(gh.downloads.length === 1 && gh.downloads[0].kind === '便携版' && /github\.com.*releases\/download/.test(gh.downloads[0].url),
+    'T16n 只收 exe 附件且认出便携版', gh.downloads.map(d => d.name).join('|'));
+  ok(gh.downloads[0].size === '72.0 MB', 'T16o 附件字节数转人读尺寸', gh.downloads[0].size);
+  ok(gh.downloads[0].sha256 === 'a'.repeat(64), 'T16p digest sha256 落到下载档案（下载后强校验）', gh.downloads[0].sha256);
+  ok(/条目一/.test(gh.notes) && !/<b>/.test(gh.notes), 'T16q release body 转成纯文本说明', String(gh.notes).slice(0, 40));
+  ok(parseGitHubRelease(null).version === '' && parseGitHubRelease({ tag_name: '' }).version === '' &&
+    parseGitHubRelease({ tag_name: 'v2.0' }).downloads.length === 0, 'T16r 空响应 / 无附件安全返回');
+  /* 版本回退只能从官网网盘下：GitHub 只负责发现版本，回退/下载直链一律归到官网 */
+  const ghHist = buildUpdateHistory(gh.downloads, '0.9');
+  ok(ghHist.length === 1 && /^https:\/\/neo2-pan\.app\.workbuddy\.host\/pan\/xlc-launcher\//.test(ghHist[0].downloads[0].url),
+    'T16s GitHub 附件直链在回退列表里被换成官网网盘地址', ghHist[0].downloads[0].url);
+  ok(hp.downloads.every(d => /^https:\/\/neo2-pan\.app\.workbuddy\.host\//.test(d.url)) &&
+    buildUpdateHistory(hp.downloads, '1.1').every(h => h.downloads.every(d => isOfficialPanUrl(d.url))),
+    'T16t 官网下载页解析出的直链原样保留（不重复改写）');
+  ok(officialDlUrl('XLC-Launcher-1.2-portable.exe') ===
+    'https://neo2-pan.app.workbuddy.host/pan/xlc-launcher/XLC-Launcher-1.2-portable.exe',
+    'T16u 官网直链拼接规则', officialDlUrl('XLC-Launcher-1.2-portable.exe'));
   const cl = currentChangelog();
   ok(!!cl, 'T17 当前版本有内置更新公告', cl ? cl.version : '缺失');
   /* 开发中的版本（dev:true）允许公告还没写完 —— 否则每开一个新版本都会立刻
@@ -9502,6 +9638,44 @@ function updateParserSelfTest() {
  * 公告「属于当前版本」：改完就往 version 与 APP_VERSION 相同的那条里加条目 ——
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
+  {
+    version: '1.2',
+    date: '2026-10-26',
+    tag: '正式版',
+    notice: '1.2 正式版发布：游戏诊断全面重做、侧边栏反馈入口、下载多线程提速与 Forge 境内安装修复全部转正；更新检测升级为「GitHub 优先、官网兜底」。感谢每一位试用候选版并反馈问题的用户。',
+    groups: [
+      {
+        icon: 'i-pulse',
+        title: '转正 · 1.2 全部候选版内容',
+        items: [
+          '**游戏诊断 v2**：崩溃报告可选可析（Description / Caused by / 涉案 MOD / 关键日志行）、识别规则 13 → 25 条、不再有「日志太旧就不看」的限制',
+          '**下载提速**：大文件多线程分段下载（30 分钟下不完一个游戏 → 几分钟）、文件并发数可调、每段独立断点续传',
+          '**Forge / NeoForge 境内安装修复**：映射文件镜像预下载 + 安装器跳过补丁，不再卡在「退出码 1」',
+          '**游戏设置「资源包 / 光影包」页**：扫描、更新检测、批量管理一应俱全',
+          '**反馈入口**：侧边栏常驻「反馈」按钮 + 主页提示条直达 GitHub Issues；提示条文案改为「测试版（快照 / 预发布 / 候选版）」'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '改动 · 更新源升级',
+        items: [
+          '更新检测**优先走 GitHub Releases**：发版即生效，不用等网盘同步；连不上（被墙 / 限流）时自动回退官方下载页，用户无感',
+          '更新结果里会标出来源（GitHub / 官网下载页）；更新包下载域白名单同步放开 GitHub 官方附件域 —— 第三方地址依旧拒绝，安全锁定不变',
+          '设置页不再显示「更新检测地址」那一行：地址内置并锁定，没必要让用户看；「打开下载页」在 GitHub 通道下会直接落到 Release 页面'
+        ]
+      },
+      {
+        icon: 'i-search',
+        title: '改动 · 中文搜索更靠谱',
+        items: [
+          '**词库没收录的中文词也能搜**：先查内置词库（「小地图」→ minimap），再没见过就自动翻成英文关键词（「钠」→ sodium）',
+          '**不再拿「全站热门」冒充结果**：CurseForge 会把不认识的中文字当空条件、直接返回下载量前 100 名（屏幕上看就像根本没搜索），现在中文解析不出英文词就跳过该源',
+          '搜不到时给的是人话建议（换更完整的说法 / 输入英文名），并在结果上方标出这次实际用的英文关键词',
+          '输入法（拼音 / 五笔）组合期间不再拿半成品去搜，选字提交后一定会重新搜一次；回车可直接搜索'
+        ]
+      }
+    ]
+  },
   {
     version: '1.2-rc4',
     date: '2026-10-25',
@@ -10261,20 +10435,15 @@ ipcMain.handle('update:seen', () => {
 });
 
 let UPDATE_CACHE = null; /* 最近一次检测结果（自动检测后进设置页可直接展示，无需重查） */
-async function doUpdateCheck(persist) {
-  const raw = updateSourceUrl();
-  if (!/^https?:\/\//i.test(raw)) {
-    return { ok: false, error: '更新源地址无效（需以 http:// 或 https:// 开头）', current: APP_VERSION, pageUrl: raw };
-  }
-  const buf = await fetchBufT(raw, UPDATE_TIMEOUT);
-  const parsed = parseUpdatePage(buf.toString('utf8'), raw);
-  if (!parsed.version) throw new Error('未能从更新源解析出版本号（地址可能不是下载页，或页面结构已变更）');
+/* 把解析出的更新档案组装成统一的结果形状（GitHub / 官网两条通道共用）
+   histDl：版本回退列表用的直链集合（默认同本次下载；GitHub 通道会额外抓官网下载页传进来） */
+function updateInfoFrom(parsed, pageUrl, via, histDl) {
   const cmp = compareVer(parsed.version, APP_VERSION);
   /* 「跳过快照版更新」（设置 → 版本更新）：更新源上是快照 / 预发布时按「不提示更新」处理，
      但把 skippedPre 一并带出去 —— 界面据此说明「为什么没提示」，而不是含糊地装作已是最新。 */
   const dec = preUpdateDecision(parsed.version, config.skipPreviewUpdate);
   const skippedPre = cmp > 0 && dec.skipped;
-  const info = {
+  return {
     ok: true,
     current: APP_VERSION,
     latest: parsed.version.replace(/^v/i, ''),
@@ -10284,15 +10453,72 @@ async function doUpdateCheck(persist) {
     skippedPre,
     skipPreEnabled: !!config.skipPreviewUpdate,
     downloads: parsed.downloads,
-    history: buildUpdateHistory(parsed.downloads, APP_VERSION),
+    history: buildUpdateHistory(
+      Array.isArray(histDl) && histDl.length ? histDl : parsed.downloads, APP_VERSION),
     notes: parsed.notes,
-    pageUrl: raw,
+    pageUrl,
+    via,
     checkedAt: Date.now(),
     ignored: !!config.ignoredVersion && normVer(config.ignoredVersion) === normVer(parsed.version)
   };
+}
+/* 通道一：官方下载页（HTML / JSON）——兜底 */
+async function doUpdateCheckPage(persist) {
+  const raw = updateSourceUrl();
+  if (!/^https?:\/\//i.test(raw)) {
+    return { ok: false, error: '更新源地址无效（需以 http:// 或 https:// 开头）', current: APP_VERSION, pageUrl: raw };
+  }
+  const buf = await fetchBufT(raw, UPDATE_TIMEOUT);
+  const parsed = parseUpdatePage(buf.toString('utf8'), raw);
+  if (!parsed.version) throw new Error('未能从更新源解析出版本号（地址可能不是下载页，或页面结构已变更）');
+  const info = updateInfoFrom(parsed, raw, '官网下载页');
   UPDATE_CACHE = info;
   if (persist) { config.lastUpdateCheck = info.checkedAt; saveConfigNow(); }
   return info;
+}
+/* 抓官网下载页的直链，只用于「版本回退」列表：GitHub 一次只给一个 Release 的附件，
+   凑不出可回退的历史版本，而官网下载页列着全部历史版本（直链也在官方网盘上）。
+   短超时 + 缓存 5 分钟 + 失败静默 —— 它挂了绝不能连累本次更新检测。 */
+const OFFICIAL_HIST_TIMEOUT = 8000;
+const OFFICIAL_HIST_TTL = 5 * 60 * 1000;
+let OFFICIAL_HIST_CACHE = { at: 0, downloads: [] };
+async function fetchOfficialHistoryDl() {
+  const now = Date.now();
+  if (OFFICIAL_HIST_CACHE.downloads.length && now - OFFICIAL_HIST_CACHE.at < OFFICIAL_HIST_TTL) {
+    return OFFICIAL_HIST_CACHE.downloads;
+  }
+  try {
+    const buf = await fetchBufT(UPDATE_DEFAULT_URL, OFFICIAL_HIST_TIMEOUT);
+    const p = parseUpdatePage(buf.toString('utf8'), UPDATE_DEFAULT_URL);
+    if (p.downloads.length) OFFICIAL_HIST_CACHE = { at: now, downloads: p.downloads };
+    return p.downloads;
+  } catch (e) {
+    try { logLine('[update] 官网下载页抓取失败（版本回退列表先用旧缓存）：' + (e.message || e)); } catch (_) {}
+    return OFFICIAL_HIST_CACHE.downloads;
+  }
+}
+/* 通道二：GitHub Releases —— 优先。任何失败都抛错，由上层回退到官网下载页。 */
+async function doUpdateCheckGitHub(persist) {
+  const buf = await fetchBufT(GH_RELEASE_API, GH_UPDATE_TIMEOUT);
+  const parsed = parseGitHubRelease(JSON.parse(buf.toString('utf8')));
+  if (!parsed.version) throw new Error('GitHub Release 响应里没有可识别的版本号');
+  const histDl = await fetchOfficialHistoryDl();   /* 只影响版本回退列表，失败留空不阻断 */
+  const info = updateInfoFrom(parsed, parsed.pageUrl || GH_RELEASE_PAGE, 'GitHub', histDl);
+  UPDATE_CACHE = info;
+  if (persist) { config.lastUpdateCheck = info.checkedAt; saveConfigNow(); }
+  return info;
+}
+async function doUpdateCheck(persist) {
+  /* 开发态调试页（XLC_UPDATE_URL）：跳过 GitHub 直接走页面源，保证测试封闭性 */
+  if (!app.isPackaged && String(process.env.XLC_UPDATE_URL || '').trim()) {
+    return doUpdateCheckPage(persist);
+  }
+  try {
+    return await doUpdateCheckGitHub(persist);
+  } catch (e1) {
+    try { logLine('[update] GitHub 更新源不可用（' + (e1.message || e1) + '），回退官方下载页'); } catch (_) {}
+    return doUpdateCheckPage(persist);
+  }
 }
 ipcMain.handle('update:check', async (_e, p) => {
   const o = p || {};
