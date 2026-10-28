@@ -140,6 +140,7 @@ try {
    离线皮肤改用标准的本地签名 Yggdrasil 服务、版本列表方块图标、修复启动后窗口消失）**
    → **1.2-snapshot2（1.2 第二个快照：可见性默认改「保持显示」+ 老配置迁移、快照版专用 UI 回归、账户设置、存档预览实时检测、插件读写设置 control、极速模式）**
    → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**→ 1.2-rc4（游戏诊断 v2：崩溃报告可选可析、规则 25 条、不限日志新旧）→ **1.2（正式版：诊断 v2 / 反馈入口转正 + 更新源 GitHub 优先、官网兜底）**
+   → **1.3-snapshot1（1.3 首个快照：内置插件「存档备份」+「模组清单对齐」，插件首次能往宿主页面注入界面）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -148,7 +149,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3-snapshot1';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -237,6 +238,11 @@ const DEFAULT_CONFIG = {
   aiApi: { base: '', key: '', model: 'gpt-4o-mini' },
   /* 插件启用状态：{ seedmap:true, server:true }（键缺省 = 启用） */
   plugins: {},
+  /* 内置插件「存档备份」的设置。
+     auto 默认 **关** —— 自动备份会实实在在占盘，不能替用户默认打开；
+     打开后两个时机都备（启动前 / 游戏退出后），dir 为空 = 数据目录下的「存档备份」。
+     keep = 每个存档保留几份（0 = 全留）。 */
+  backup: { auto: false, onLaunch: true, onExit: true, dir: '', keep: 10 },
   /* 社区插件（拓展插件）实际被授权的权限：{ '<插件id>': ['notify','storage'] }。
      清单里声明了什么是一回事，用户导入时点了哪些才是真正放行的 —— 这里存用户的选择。
      没装过的 id 不在表里 = 一项都没授权。 */
@@ -829,6 +835,12 @@ ipcMain.handle('mods:update', async (_e, p) => {
 const { mdToHtml } = require('./src/md-core');
 /* 中文搜索词的译文清洗（纯函数，单测在 qa/search-zh-unit.js） */
 const { hasCJK, enKeywordsFromTranslation } = require('./src/search-zh');
+/* 内置插件「存档备份」：命名 / 保留策略 / 是否该备（纯函数，qa/savebackup-unit.js）
+   + 自己写的流式 ZIP 读写（存档几十 MB，不能整包塞内存） */
+const SB_CORE = require('./src/savebackup-core');
+const ZIPW = require('./src/zip-write');
+/* 内置插件「模组清单对齐」：清单生成 / 解析 / 差异（纯函数，qa/modalign-unit.js） */
+const MA_CORE = require('./src/modalign-core');
 const RES_ZIP = require('./zipio');
 const RES_ST = { key: '', res: null, at: 0 };
 function resourcepacksDirFor(instance) {
@@ -1114,6 +1126,8 @@ function saveConfigNow() {
   try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2)); } catch (_) {}
 }
 let config = loadConfig();
+/* 存档备份设置规整：老配置里没有 backup 字段、或者被外部改脏了，都在这里落回合法值 */
+config.backup = SB_CORE.normalizeBackupCfg(config.backup);
 /* 首次运行（照 PCL 的做法「点开就有文件」）：默认配置直接落盘。
  * 此时 XLC数据 / .minecraft / diagnostics 目录已在启动阶段建好，再加上这份 lmc.config.json，
  * 用户双击 exe 之后就能在它旁边看到一整套文件，而不是「打开一次什么都没留下」。
@@ -2448,14 +2462,64 @@ async function fetchMrJson(attempts, init) {
   throw new Error('官方源与镜像源均失败（' + errs[errs.length - 1] + '）');
 }
 async function mrJson(p) { return fetchMrJson(mrUrls(p)); }
+/* ---------------- 内容下载的「停止」----------------
+   MOD / 整合包 / 资源包 / 光影 / 数据包下载没有 runPool，用这张表登记进行中的任务：
+   渲染层点「停止」→ download:cancel → abort，fetch 当场打断。
+   key 由渲染层生成并随安装参数一起传过来（jobKey），主进程不猜。 */
+const DL_ACS = new Map();          /* jobKey → AbortController */
+function dlSignalOf(key) {
+  const ac = new AbortController();
+  DL_ACS.set(String(key), ac);
+  return ac.signal;
+}
+function dlRelease(key) { DL_ACS.delete(String(key)); }
+ipcMain.handle('download:cancel', (_e, key) => {
+  const ac = DL_ACS.get(String(key || ''));
+  if (!ac) return { ok: false, error: '当前没有正在进行的下载' };
+  ac.abort();
+  return { ok: true };
+});
+/* 冒烟测试专用（仅 LMC_SMOKE_DL=1 时注册）：让测试直接驱动 downloadBig 打本地慢速服务器，
+   验证「停止」能打断分段下载、并保证不留半截文件。生产环境根本不注册这个通道。 */
+if (SMOKE_EARLY && process.env.LMC_SMOKE_DL) {
+  ipcMain.handle('smoke:download', async (_e, p) => {
+    const key = String((p && p.jobKey) || '');
+    const dest = String((p && p.dest) || '');
+    const sig = key ? dlSignalOf(key) : null;
+    const t0 = Date.now();
+    let got = 0, err = '';
+    try {
+      got = await downloadBig(String(p.url), dest, null, sig, {});
+    } catch (e) { err = e.message; }
+    const out = {
+      ok: !err,
+      cancelled: !!(sig && sig.aborted),
+      error: err,
+      got,
+      ms: Date.now() - t0,          /* 下到一半被打断时 got 拿不到（分段路径是抛错退出），用耗时判「确实在传」 */
+      destExists: dest ? fs.existsSync(dest) : false,
+      tmpExists: dest ? fs.existsSync(dest + '.xlc-tmp') : false
+    };
+    if (key) dlRelease(key);
+    return out;
+  });
+}
+/* 外部取消信号 → 转给本轮内部 AbortController（mrDownload / cfDownload 每轮自建 ac 挂看门狗） */
+function relayAbort(ext, ac) {
+  if (!ext) return;
+  if (ext.aborted) ac.abort();
+  else ext.addEventListener('abort', () => ac.abort(), { once: true });
+}
 /* Modrinth CDN 文件下载：官方优先，首字节 10 秒未到/失败自动切镜像；两轮抗抖动 */
-async function mrDownload(url, dest, onProgress) {
+async function mrDownload(url, dest, onProgress, extSignal) {
   const attempts = mrBinUrls(url);
   let lastErr = null;
   for (let round = 0; round < 2; round++) {
+    if (extSignal && extSignal.aborted) throw new Error('已取消');
     if (round > 0) await new Promise(r => setTimeout(r, 1500));
     for (const a of attempts) {
       const ac = new AbortController();
+      relayAbort(extSignal, ac);
       let got = 0;
       const kick = (pct, g, t) => { got = g; if (onProgress) onProgress(pct, g, t); };
       const watchdog = setTimeout(() => { if (got === 0) ac.abort(); }, 10000);
@@ -2464,6 +2528,8 @@ async function mrDownload(url, dest, onProgress) {
         if (a.official) mrOfficialOk(); /* 官方成功才清除冷却窗口 */
         return;
       } catch (e) {
+        /* 用户点了「停止」：不再切镜像 / 不再重试，直接出去 */
+        if (extSignal && extSignal.aborted) throw new Error('已取消');
         lastErr = e;
         if (a.official && attempts.length > 1) mrUseMirror();
       } finally { clearTimeout(watchdog); }
@@ -3250,20 +3316,26 @@ function cfFileUrls(file) {
     urls.push('https://mediafilez.forgecdn.net/files/' + Math.floor(id / 1000) + '/' + (id % 1000) + '/' + encodeURIComponent(file.fileName));
   return [...new Set(urls)];
 }
-async function cfDownload(file, dest, onProgress) {
+async function cfDownload(file, dest, onProgress, extSignal) {
   const attempts = cfFileUrls(file);
   let lastErr = null;
   for (let round = 0; round < 2; round++) {
+    if (extSignal && extSignal.aborted) throw new Error('已取消');
     if (round > 0) await new Promise(r => setTimeout(r, 1500));
     for (const url of attempts) {
       const ac = new AbortController();
+      relayAbort(extSignal, ac);
       let got = 0, lastGot = -1;
       /* 看门狗：每 30s 检查一次，数据有增长就续期；CDN 首字节可能慢至 ~10s，不能按 10s 误杀 */
       const watchdog = setInterval(() => {
         if (got === lastGot) ac.abort(); else lastGot = got;
       }, 30000);
       try { await downloadBig(url, dest, (pct, g, t) => { got = g; if (onProgress) onProgress(pct, g, t); }, ac.signal); return; }
-      catch (e) { lastErr = e; }
+      catch (e) {
+        /* 用户点了「停止」：不再换 CDN 地址重试 */
+        if (extSignal && extSignal.aborted) throw new Error('已取消');
+        lastErr = e;
+      }
       finally { clearInterval(watchdog); }
     }
   }
@@ -3300,10 +3372,74 @@ function modAlreadyInstalledError(dest) {
   if (fs.existsSync(dest + '.disabled')) return '该 MOD 已安装但当前处于禁用状态（' + name + '.disabled），如需更新请先到「MOD 管理」页删除旧文件';
   return null;
 }
+/* 「没选版本」时安装 MOD：照 PCL 的做法问用户存哪里，不擅自塞进某个实例。
+   顺序 = 先查出 jar 文件名 → 系统「选择保存位置」（默认落在 mods 目录、文件名预填）→ 下载到该路径。
+   用户点取消就什么都不做（返回 canceled，界面按「已取消」提示，不当成安装失败）。 */
+const SMOKE_SAVE_MODE = String(process.env.LMC_SMOKE_SAVE_MODE || '');
+const SMOKE_SAVE_PATH = String(process.env.LMC_SMOKE_SAVE_PATH || '');
+async function installModPicked(p, dlsig) {
+  logLine('[modsave] enter mode=' + SMOKE_SAVE_MODE + ' src=' + p.source + ' id=' + p.projectId);
+  let fileName = '', url = '', cfFile = null;
+  if (p.source === 'curseforge') {
+    const modId = String(p.projectId || '').replace(/^cf/, '');
+    if (!/^\d+$/.test(modId)) throw new Error('CurseForge 项目 ID 无效');
+    const files = (await cfJson('/mods/' + modId + '/files?pageIndex=0&pageSize=50')).data || [];
+    files.sort((a, b) => new Date(b.fileDate || 0) - new Date(a.fileDate || 0));
+    cfFile = (p.fileRef && files.find(f => String(f.id) === String(p.fileRef))) || files[0];
+    if (!cfFile || !cfFile.fileName) throw new Error('该项目没有可下载的文件');
+    fileName = cfFile.fileName;
+  } else {
+    const vers = await mrJson('/project/' + encodeURIComponent(p.projectId) + '/version');
+    if (!vers.length) throw new Error('该项目没有可下载的文件');
+    const chosen = (p.fileRef && vers.find(v => v.id === p.fileRef)) || vers[0];
+    const files = chosen.files || [];
+    const file = files.find(f => f.primary) || files.find(f => /\.jar$/i.test(f.filename || f.url)) || files[0];
+    if (!file || !file.url) throw new Error('版本下没有可用文件');
+    url = file.url;
+    fileName = file.filename || path.basename(new URL(file.url).pathname);
+  }
+  /* 文件名里绝不能带路径分隔符（有些项目的 filename 直接给了子路径） */
+  fileName = String(fileName).replace(/[\\/:*?"<>|]/g, '_').trim() || ('mod-' + Date.now() + '.jar');
+  const defDir = MODS_DIR();
+  try { fs.mkdirSync(defDir, { recursive: true }); } catch (_) {}
+  logLine('[modsave] file=' + fileName + ' defDir=' + defDir);
+  let dest = '';
+  if (SMOKE_SAVE_MODE === 'cancel') {
+    /* 冒烟：模拟用户在系统对话框里点了「取消」 */
+    return { ok: false, canceled: true };
+  } else if (SMOKE_SAVE_MODE === 'path' && SMOKE_SAVE_PATH) {
+    /* 冒烟/自动化：不弹系统窗口，直接落到指定路径（生产环境这个变量不存在） */
+    dest = SMOKE_SAVE_PATH;
+  } else {
+    const r = await dialog.showSaveDialog(win || undefined, {
+      title: '选择保存位置',
+      buttonLabel: '保存',
+      defaultPath: path.join(defDir, fileName),
+      filters: [{ name: 'Mod 文件 (*.jar)', extensions: ['jar'] }, { name: '全部文件', extensions: ['*'] }],
+      properties: ['createDirectory', 'showOverwriteConfirmation']
+    });
+    if (!r || r.canceled || !r.filePath) return { ok: false, canceled: true };
+    dest = r.filePath;
+  }
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  setStatus('下载 MOD: ' + path.basename(dest), true);
+  if (cfFile) await cfDownload(cfFile, dest, () => {}, dlsig);
+  else await mrDownload(url, dest, () => {}, dlsig);
+  setStatus('就绪');
+  logLine('[download] MOD 另存为: ' + dest);
+  toast('MOD 已保存到: ' + dest);
+  let size = 0;
+  try { size = fs.statSync(dest).size; } catch (_) {}
+  return { ok: true, saved: true, path: dest, size, file: path.basename(dest) };
+}
 /* 下载 mod 文件到 gd/mods（目标 = 本地已安装的带加载器版本） */
 ipcMain.handle('modrinth:install-mod', async (_e, p) => {
+  /* jobKey：渲染层生成的一次性任务号，点「停止」时凭它找到这个任务打断 */
+  const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
   try {
     netReset();
+    /* 下载页「目标版本」停在「全部」（没选具体实例）→ 走「选择保存位置」，不猜实例 */
+    if (p.pickPath && !p.instance) return await installModPicked(p, dlsig);
     const chain = await loadVersionChain(p.versionId, config.gameDir, 0);
     const mcVer = chain.rootId;
     const loader = loaderToMr(detectLoaderOf(chain.json));
@@ -3337,7 +3473,7 @@ ipcMain.handle('modrinth:install-mod', async (_e, p) => {
       if (dupErr) throw new Error(dupErr);
       await fsp.mkdir(path.dirname(dest), { recursive: true });
       setStatus('下载 MOD: ' + file.fileName, true);
-      await cfDownload(file, dest, () => {});
+      await cfDownload(file, dest, () => {}, dlsig);
       setStatus('就绪');
       toast('MOD 已安装到「' + (p.instance ? p.instance : '全局 mods') + '」: ' + file.fileName);
       return { ok: true, file: file.fileName };
@@ -3364,14 +3500,18 @@ ipcMain.handle('modrinth:install-mod', async (_e, p) => {
     if (dupErr) throw new Error(dupErr);
     await fsp.mkdir(path.dirname(dest), { recursive: true });
     setStatus('下载 MOD: ' + path.basename(dest), true);
-    await mrDownload(file.url, dest, () => {});
+    await mrDownload(file.url, dest, () => {}, dlsig);
     setStatus('就绪');
     toast('MOD 已安装到「' + (p.instance ? p.instance : '全局 mods') + '」: ' + path.basename(dest));
     return { ok: true, file: path.basename(dest) };
-  } catch (e) { setStatus('就绪'); return { ok: false, error: e.message }; }
+  } catch (e) {
+    setStatus('就绪');
+    return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
+  } finally { if (p.jobKey) dlRelease(p.jobKey); }   /* 成功/失败都注销，别留过期任务号 */
 });
 /* 下载资源包 / 数据包：资源包 → gd/resourcepacks/；数据包 → gd/saves/<world>/datapacks/ */
 ipcMain.handle('modrinth:install-pack', async (_e, p) => {
+  const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
   try {
     netReset();
     const type = ['datapack', 'shader'].includes(p.type) ? p.type : 'resourcepack';
@@ -3413,7 +3553,7 @@ ipcMain.handle('modrinth:install-pack', async (_e, p) => {
     }
     await fsp.mkdir(path.dirname(dest), { recursive: true });
     setStatus('下载' + typeName + ': ' + path.basename(dest), true);
-    await mrDownload(file.url, dest, () => {});
+    await mrDownload(file.url, dest, () => {}, dlsig);
     setStatus('就绪');
     toast(type === 'datapack'
       ? '数据包已装入「' + p.world + '」：' + path.basename(dest) + '（进入世界后自动生效）'
@@ -3421,10 +3561,13 @@ ipcMain.handle('modrinth:install-pack', async (_e, p) => {
         ? '光影已装入 shaderpacks：' + path.basename(dest) + '（游戏内用 Iris / OptiFine 选中即可生效）'
         : typeName + '已安装: ' + path.basename(dest));
     return { ok: true, file: path.basename(dest) };
-  } catch (e) { setStatus('就绪'); return { ok: false, error: e.message }; }
+  } catch (e) {
+    setStatus('就绪');
+    return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
+  } finally { if (p.jobKey) dlRelease(p.jobKey); }
 });
 /* 下载并安装 Modrinth 整合包（.mrpack） */
-async function installModrinthIndex(index, packBuf, displayName) {
+async function installModrinthIndex(index, packBuf, displayName, dlsig) {
   const deps = index.dependencies || {};
   const mcVer = deps.minecraft || deps['minecraft'];
   let loader = 'vanilla';
@@ -3435,6 +3578,8 @@ async function installModrinthIndex(index, packBuf, displayName) {
   const name = sanitizeVersionId(displayName || index.name || ('modpack-' + mcVer));
   prepareInstallSlot(config.gameDir, name); /* 已安装→友好提示；残留目录→自动归档 */
   send('launch:log', '[整合包] 安装 Minecraft ' + mcVer + ' (' + loader + ') · 名称 ' + name);
+  /* 注意：installMcWithLoader 走的是游戏安装那套（无取消信号），「停止」在这个阶段
+     只能等到下一个整合包文件开始时才生效 —— 先这么用，深改游戏安装超本次范围 */
   const versionId = await installMcWithLoader(mcVer, loader, name);
   const gd = config.gameDir;
   // mod 文件（path 相对 gameDir，禁止越界）
@@ -3442,13 +3587,14 @@ async function installModrinthIndex(index, packBuf, displayName) {
   let i = 0;
   phaseBegin('modpack-files', files.reduce((s, f) => s + (f.fileSize || 0), 0));
   for (const f of files) {
+    if (dlsig && dlsig.aborted) throw new Error('已取消');
     i++;
     if (!f.path || /\.\./.test(f.path) || path.isAbsolute(f.path)) continue;
     const url = (f.downloads || [])[0];
     if (!url) continue;
     send('install:progress', { stage: 'modpack-files', current: i, total: files.length, percent: Math.round(i / files.length * 100), text: '整合包文件 ' + i + '/' + files.length });
     const dest = path.join(gd, f.path);
-    await mrDownload(url, dest, () => {});
+    await mrDownload(url, dest, () => {}, dlsig);
   }
   // overrides 覆盖到 gameDir（options.txt 不覆盖已有）
   if (packBuf) {
@@ -3468,6 +3614,7 @@ async function installModrinthIndex(index, packBuf, displayName) {
   return { versionId, mods: files.length };
 }
 ipcMain.handle('modrinth:install-modpack', async (_e, p) => {
+  const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
   try {
     netReset();
     const vers = await mrJson('/project/' + encodeURIComponent(p.projectId) + '/version');
@@ -3476,15 +3623,18 @@ ipcMain.handle('modrinth:install-modpack', async (_e, p) => {
     if (!file || !/\.mrpack$/i.test(file.filename || '')) throw new Error('未找到 .mrpack 主文件');
     const tmp = path.join(os.tmpdir(), 'lmc-' + file.filename);
     setStatus('下载整合包: ' + file.filename, true);
-    await mrDownload(file.url, tmp, () => {});
+    await mrDownload(file.url, tmp, () => {}, dlsig);
     const buf = await fsp.readFile(tmp);
     const index = JSON.parse(zipReadEntry(buf, 'modrinth.index.json').toString('utf8'));
-    const r = await installModrinthIndex(index, buf, p.name || vers[0].name || p.projectId);
+    const r = await installModrinthIndex(index, buf, p.name || vers[0].name || p.projectId, dlsig);
     await fsp.unlink(tmp).catch(() => {});
     setStatus('就绪');
     toast('整合包安装完成: ' + r.versionId);
     return { ok: true, versionId: r.versionId };
-  } catch (e) { setStatus('就绪'); return { ok: false, error: e.message }; }
+  } catch (e) {
+    setStatus('就绪');
+    return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
+  } finally { if (p.jobKey) dlRelease(p.jobKey); }
 });
 
 /* ---------------- 整合包导出 / 本地导入 ---------------- */
@@ -5131,6 +5281,15 @@ async function runLaunch(opts) {
   }
 
   setStatus('游戏运行中: ' + versionId, true);
+  /* 内置插件「存档备份」：启动前给「变过的存档」拍一张。
+     预算 20 秒 —— 备份再重要也不能让玩家点了启动干等；超时的存档下次再备。
+     失败只写日志，绝不影响启动。 */
+  try {
+    const bk = await autoBackupSaves('launch', 20000);
+    if (bk && bk.done && bk.done.length) {
+      send('launch:log', '[XLC] 存档备份：已备份 ' + bk.done.map(d => d.name).join('、') + '（启动前）');
+    }
+  } catch (e) { logLine('[backup] 启动前自动备份失败: ' + e.message); }
   send('launch:log', '[XLC] 启动命令: ' + path.basename(java.path) + ' ' + args.join(' ').slice(0, 400) + ' …');
   /* 请求使用高性能显卡（设置 → 启动）：Windows 上给子进程加这一条启动信息，
      双显卡笔记本会优先用独显（不保证 100% 生效，取决于驱动与系统设置）。 */
@@ -5195,6 +5354,9 @@ async function runLaunch(opts) {
     /* 游戏退出后把因「启动器可见性」藏起来的主窗口收回来，否则用户会以为启动器被关掉了；
        顺带清掉可能还挂着的隐藏定时器（进程秒退时它本会把窗口藏掉） */
     restoreLauncherWindow();
+    /* 内置插件「存档备份」：游戏退出后再备一次（这次覆盖本次游玩全部进度）。
+       延迟 2.5 秒 —— 进程刚退时 region 文件可能还在 flush，太早打包会读到半截文件。 */
+    setTimeout(() => { autoBackupSaves('exit', 90000).catch(() => {}); }, 2500);
     send('launch:stage', { stage: 'idle', code, byUser });
     setStatus('就绪');
     /* 主动关闭属于正常收尾：taskkill 出来的退出码当然不是 0，但这不是崩溃 ——
@@ -5899,6 +6061,273 @@ ipcMain.handle('saves:delete', async (_e, p) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+/* ================================================================
+ * 内置插件：存档备份（savebackup）
+ * ================================================================
+ * 用户要的两件事：① 存档详情里「打开目录」旁边多一个「备份存档」；
+ *                 ② 插件设置里能开「自动备份」，默认备到 XLC数据。
+ *
+ * 几个刻意的选择：
+ *   · 备份是**逐个文件流式**写 zip（src/zip-write.js），不是整包塞内存 —— 存档几十上百 MB，
+ *     自动备份还要连着做好几个，攒内存会直接顶爆主进程。
+ *   · 每个 zip 旁边放一份同名 .json（save / instance / at / 文件数 / 体积）：同名存档
+ *     可能同时存在于全局 saves 和某个隔离实例里，恢复时必须知道它原来属于谁。
+ *   · 恢复前先把「现在的存档」也备一份（tag=before-restore）——否则用户手滑点了恢复，
+ *     刚玩的进度就没了，这个插件反而成了数据丢失的元凶。
+ *   · 自动备份只在「存档目录比上次备份更新」时才动（SB_CORE.shouldBackup），
+ *     不会每启动一次就多一份一模一样的包。
+ * ================================================================ */
+function backupRoot() {
+  const c = SB_CORE.normalizeBackupCfg(config.backup);
+  return c.dir ? path.resolve(c.dir) : path.join(DATA_DIR, '存档备份');
+}
+function backupDirOf(saveName) { return path.join(backupRoot(), SB_CORE.safeName(saveName)); }
+/* 存档目录里最新的文件时间：level.dat / region 文件都会被算进去，比目录 mtime 准 */
+async function dirNewestMtime(dir) {
+  let max = 0;
+  const walk = async (d) => {
+    let names = [];
+    try { names = await fsp.readdir(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const ent of names) {
+      const p = path.join(d, ent.name);
+      if (ent.isDirectory()) { await walk(p); continue; }
+      try { const st = await fsp.stat(p); if (st.mtimeMs > max) max = st.mtimeMs; } catch (_) {}
+    }
+  };
+  await walk(dir);
+  return max;
+}
+/* 备份目录里最新的备份时间（没有备份 = 0） */
+function newestBackupAt(saveName) {
+  const dir = backupDirOf(saveName);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return 0; }
+  let max = 0;
+  for (const n of names) {
+    const b = SB_CORE.parseBackupName(n);
+    if (b && b.at > max) max = b.at;
+  }
+  return max;
+}
+function pruneBackupsOf(saveName) {
+  const cfg = SB_CORE.normalizeBackupCfg(config.backup);
+  const dir = backupDirOf(saveName);
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return 0; }
+  const items = [];
+  for (const n of names) {
+    const b = SB_CORE.parseBackupName(n);
+    if (b) items.push({ file: n, at: b.at });
+  }
+  const del = SB_CORE.planPrune(items, cfg.keep);
+  for (const d of del) {
+    try { fs.unlinkSync(path.join(dir, d.file)); } catch (_) {}
+    try { fs.unlinkSync(path.join(dir, d.file.replace(/\.zip$/, '.json'))); } catch (_) {}
+  }
+  return del.length;
+}
+/* 真做一次备份：调用方保证 save = { name, path, instance } */
+async function doSaveBackup(save, tag) {
+  let at = Date.now();
+  const dir = backupDirOf(save.name);
+  fs.mkdirSync(dir, { recursive: true });
+  /* 文件名精确到「秒」：同一秒里连备两次（恢复前的兜底 vs 手动备份、连点两下）会撞名 → 后来的把前一份覆盖掉。
+     撞了就往后挪一秒再试（最多 60 次），保证「每备一次就多一份」。 */
+  let file = path.join(dir, SB_CORE.backupFileName(save.name, at));
+  for (let i = 1; fs.existsSync(file) && i <= 60; i++) {
+    at = Date.now() + i * 1000;
+    file = path.join(dir, SB_CORE.backupFileName(save.name, at));
+  }
+  const r = ZIPW.zipDirToFile(save.path, file);
+  const meta = { save: save.name, instance: save.instance || '', at, files: r.files, bytes: r.bytes, tag: tag || '' };
+  try { fs.writeFileSync(file.replace(/\.zip$/, '.json'), JSON.stringify(meta, null, 1), 'utf8'); } catch (_) {}
+  const pruned = pruneBackupsOf(save.name);
+  logLine('[backup] 已备份存档「' + save.name + '」→ ' + file + '（' + r.files + ' 个文件 / ' + SB_CORE.humanBytes(r.bytes) + (tag ? ' / ' + tag : '') + '，清理旧备份 ' + pruned + ' 份）');
+  return { ok: true, file, name: save.name, at, files: r.files, bytes: r.bytes, tag: tag || '', pruned };
+}
+/* 按名字 + 实例找存档（**不信任渲染层传来的路径**：只认扫描结果） */
+async function findSaveByName(name, instance) {
+  const want = String(name || '');
+  const inst = String(instance || '');
+  const list = await scanSaveDirs();
+  return list.find(s => s.name === want && String(s.instance || '') === inst) || null;
+}
+/* 备份清单：扫备份根目录下每个存档子目录 */
+function listSaveBackups() {
+  const root = backupRoot();
+  const out = [];
+  let dirs = [];
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }); } catch (_) { return out; }
+  for (const ent of dirs) {
+    if (!ent.isDirectory()) continue;
+    const dir = path.join(root, ent.name);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (_) { continue; }
+    for (const n of names) {
+      const b = SB_CORE.parseBackupName(n);
+      if (!b) continue;
+      const full = path.join(dir, n);
+      let st = null, meta = null;
+      try { st = fs.statSync(full); } catch (_) { continue; }
+      try { meta = JSON.parse(fs.readFileSync(full.replace(/\.zip$/, '.json'), 'utf8')); } catch (_) {}
+      out.push({
+        save: (meta && meta.save) || b.save,
+        instance: (meta && meta.instance) || '',
+        at: (meta && meta.at) || b.at,
+        file: full,
+        name: n,
+        bytes: (meta && meta.bytes) || st.size,
+        files: (meta && meta.files) || 0,
+        tag: (meta && meta.tag) || ''
+      });
+    }
+  }
+  out.sort((a, b) => b.at - a.at);
+  return out;
+}
+/* 自动备份：启动前 / 退出后各调一次。phase 决定要不要跑（用户在插件设置里能分别关掉） */
+let AUTO_BAK_BUSY = false;
+async function autoBackupSaves(phase, budgetMs) {
+  const cfg = SB_CORE.normalizeBackupCfg(config.backup);
+  if (!cfg.auto) return { ok: true, skipped: 'auto-off' };
+  if (phase === 'launch' ? !cfg.onLaunch : !cfg.onExit) return { ok: true, skipped: 'phase-off' };
+  if (AUTO_BAK_BUSY) return { ok: true, skipped: 'busy' };
+  AUTO_BAK_BUSY = true;
+  const t0 = Date.now();
+  const done = [];
+  try {
+    const saves = await scanSaveDirs();
+    for (const s of saves) {
+      if (budgetMs && Date.now() - t0 > budgetMs) { logLine('[backup] 自动备份超出时间预算，剩下的下次再备'); break; }
+      const mtime = await dirNewestMtime(s.path);
+      if (!SB_CORE.shouldBackup({ lastAt: newestBackupAt(s.name), saveMtime: mtime })) continue;
+      try { done.push(await doSaveBackup(s, 'auto-' + phase)); }
+      catch (e) { logLine('[backup] 自动备份「' + s.name + '」失败: ' + e.message); }
+    }
+    if (done.length) send('backup:auto-done', { phase, items: done.map(d => ({ name: d.name, at: d.at, bytes: d.bytes })) });
+  } finally { AUTO_BAK_BUSY = false; }
+  return { ok: true, done };
+}
+ipcMain.handle('saves:backup', async (_e, p) => {
+  try {
+    const save = await findSaveByName(p && p.name, p && p.instance);
+    if (!save) return { ok: false, error: '找不到这个存档（可能刚被移动或删除）' };
+    return await doSaveBackup(save, (p && p.tag) || 'manual');
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('saves:backups', () => {
+  try { return { ok: true, root: backupRoot(), items: listSaveBackups(), cfg: SB_CORE.normalizeBackupCfg(config.backup) }; }
+  catch (e) { return { ok: false, error: e.message, items: [] }; }
+});
+ipcMain.handle('saves:backup-all', async () => {
+  const t0 = Date.now();
+  const done = [];
+  try {
+    for (const s of await scanSaveDirs()) {
+      try { done.push(await doSaveBackup(s, 'manual-all')); }
+      catch (e) { logLine('[backup] 备份「' + s.name + '」失败: ' + e.message); }
+    }
+    return { ok: true, items: done, ms: Date.now() - t0 };
+  } catch (e) { return { ok: false, error: e.message, items: done }; }
+});
+ipcMain.handle('saves:backup-dir', async () => {
+  const root = backupRoot();
+  try { fs.mkdirSync(root, { recursive: true }); } catch (_) {}
+  const r = await shell.openPath(root);
+  return r ? { ok: false, error: r } : { ok: true, path: root };
+});
+/* 删一份备份（连同 sidecar）；只允许删备份目录里的文件 */
+ipcMain.handle('saves:backup-delete', async (_e, p) => {
+  try {
+    const file = path.resolve(String((p && p.file) || ''));
+    const rel = path.relative(path.resolve(backupRoot()), file);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, error: '拒绝操作：文件不在备份目录里' };
+    if (!/\.zip$/i.test(file)) return { ok: false, error: '只允许删除备份文件' };
+    await shell.trashItem(file);                                   /* 先扔回收站，删错了还能捞回来 */
+    try { await shell.trashItem(file.replace(/\.zip$/, '.json')); } catch (_) {}
+    logLine('[backup] 已删除备份: ' + file);
+    return { ok: true, file };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('saves:restore', async (_e, p) => {
+  try {
+    /* 游戏还开着就覆盖存档目录 = 一边写一边删，轻则这次白存，重则整个档坏掉。
+       备份可以边玩边做（最多是这次快照不太整齐），恢复必须先关游戏。 */
+    if (GAME_PROC && GAME_PROC.exitCode === null) {
+      return { ok: false, error: '游戏正在运行 —— 先退出游戏再恢复存档（边玩边覆盖会把档写坏）' };
+    }
+    const file = path.resolve(String((p && p.file) || ''));
+    const root = path.resolve(backupRoot());
+    const rel = path.relative(root, file);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, error: '拒绝操作：备份文件不在备份目录里' };
+    if (!fs.existsSync(file)) return { ok: false, error: '备份文件不存在（可能已被删除）' };
+    let meta = null;
+    try { meta = JSON.parse(fs.readFileSync(file.replace(/\.zip$/, '.json'), 'utf8')); } catch (_) {}
+    const b = SB_CORE.parseBackupName(path.basename(file));
+    const saveName = (meta && meta.save) || (b && b.save) || '';
+    const instance = (meta && meta.instance) || '';
+    if (!saveName) return { ok: false, error: '这个文件不像是本插件生成的备份' };
+    const save = await findSaveByName(saveName, instance);
+    if (!save) return { ok: false, error: '找不到存档「' + saveName + '」' + (instance ? '（实例 ' + instance + '）' : '') + '，请先确认它还在存档列表里' };
+    /* 先把当前存档备一份：手滑点了恢复也能回来 */
+    let safety = null;
+    try { safety = await doSaveBackup(save, 'before-restore'); } catch (e) { logLine('[backup] 恢复前备份失败（继续恢复）: ' + e.message); }
+    const r = ZIPW.extractZipTo(file, save.path);
+    logLine('[backup] 已恢复存档「' + saveName + '」← ' + file + '（' + r.files + ' 个文件）');
+    return { ok: true, name: saveName, instance, files: r.files, safety: safety ? safety.file : '' };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+/* ================================================================
+ * 内置插件：模组清单对齐（modalign）
+ * ================================================================
+ * 场景：朋友发你整合包 / 一起联机，进游戏崩了或提示缺少模组 —— 两边模组清单不一样。
+ * 做法：把 mods 目录扫成一份「清单文本」（sha1 前 12 位 + 体积 + 文件名），
+ *       走好友通道（MQTT 信令）直接发给对方，也可以在联机页复制/粘贴；
+ *       收到后算差异：**少几个（要去下载）/ 多几个 / 同名但版本不同（要换文件）**。
+ *
+ * 哈希只取「前 4MB + 文件大小」：这是给「判断两边是不是同一个文件」用的标识，
+ * 不是完整性校验 —— 整份 300MB 的整合包没必要为了清单全读一遍。
+ * ================================================================ */
+const MODALIGN_INBOX = [];      /* 最近收到的清单：{ from, name, text, at }，最多 5 条 / 30 分钟 */
+function fileSig(p) {
+  try {
+    const st = fs.statSync(p);
+    const fd = fs.openSync(p, 'r');
+    const len = Math.min(st.size, 4 << 20);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, 0);
+    fs.closeSync(fd);
+    return { size: st.size, sha1: crypto.createHash('sha1').update(buf).update(String(st.size)).digest('hex') };
+  } catch (_) { return null; }
+}
+ipcMain.handle('mods:manifest', async (_e, p) => {
+  try {
+    const instance = String((p && p.instance) || '');
+    const dir = modsDirFor(instance);
+    let names = [];
+    try { names = await fsp.readdir(dir); } catch (_) { return { ok: false, error: '这个实例还没有 mods 目录：' + dir }; }
+    const list = [];
+    for (const n of names) {
+      if (!MA_CORE.isModFile(n)) continue;
+      const abs = path.join(dir, n);
+      const sig = fileSig(abs);
+      if (sig) list.push({ name: n, size: sig.size, sha1: sig.sha1 });
+    }
+    const mods = MA_CORE.normalizeMods(list);
+    return { ok: true, instance, dir, count: mods.length, text: MA_CORE.buildManifest(list), mods };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('mods:diff', (_e, p) => {
+  try { return Object.assign({ ok: true }, MA_CORE.diffManifests(String((p && p.mine) || ''), String((p && p.theirs) || ''))); }
+  catch (e) { return { ok: false, error: e.message, missing: [], extra: [], differ: [], same: 0 }; }
+});
+ipcMain.handle('modlist:inbox', () => {
+  const now = Date.now();
+  while (MODALIGN_INBOX.length && now - MODALIGN_INBOX[MODALIGN_INBOX.length - 1].at > 30 * 60 * 1000) MODALIGN_INBOX.pop();
+  return { ok: true, items: MODALIGN_INBOX };
+});
+ipcMain.handle('modlist:clear', () => { MODALIGN_INBOX.length = 0; return { ok: true }; });
 /* ---------------- 网络测速 ---------------- */
 /* 只允许给「下载源」测速：渲染层被 XSS 时也不能拿这个通道去探内网端口。
    白名单 = 两个官方清单主机 + 用户在设置里填的自定义下载源主机。 */
@@ -5943,7 +6372,11 @@ const BUILTIN_PLUGINS = [
   { id: 'seedmap', name: '种子地图', ver: '1.0.1', tag: '工具' },
   { id: 'server', name: '一键开服', ver: '1.0.0', tag: '联机' },
   { id: 'gamepad', name: '手柄控制', ver: '1.0.0', tag: '操作' },
-  { id: 'translator', name: '模组翻译器', ver: '1.0.0', tag: '工具' }
+  { id: 'translator', name: '模组翻译器', ver: '1.0.0', tag: '工具' },
+  /* 1.3 起：这两个内置插件的特别之处是「改宿主页面」——不是独立面板，
+     而是往存档详情弹窗 / 联机页里插自己的按钮与卡片（见 renderer.js 的 UI_HOOKS） */
+  { id: 'savebackup', name: '存档备份', ver: '1.0.0', tag: '存档' },
+  { id: 'modalign', name: '模组清单对齐', ver: '1.0.0', tag: '联机' }
 ];
 function pluginEnabled(id) {
   const m = config.plugins || {};
@@ -9639,6 +10072,83 @@ function updateParserSelfTest() {
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
   {
+    version: '1.3-snapshot1',
+    date: '2026-10-28',
+    tag: '1.3 快照版',
+    notice: '1.3 首个快照（snapshot1）：两个内置插件 —— 「存档备份」和「模组清单对齐」，侧边栏「反馈」改成启动器内的独立页面，下载也终于能中途停下来了。这一版还有个底层变化：内置插件第一次能往启动器的页面里注入界面，不再只能待在插件页或独立窗口里。快照版可能有不稳定的地方，遇到问题欢迎到侧边栏「反馈」提 Issue。',
+    groups: [
+      {
+        icon: 'i-drive',
+        title: '新增 · 内置插件「存档备份」',
+        items: [
+          '**存档详情里直接备份**：存档管理点开某个世界，「打开目录」右边多了「备份存档」，一下把这个存档打包成一个 zip',
+          '**自动备份**：插件设置里可以开总开关，选「启动游戏前」和「退出游戏后」两个时机；只备份**变过的**存档（按存档目录最新改动时间判断），没动过的不会重复备',
+          '**默认存在启动器数据目录**：`XLC数据\\存档备份\\<存档名>\\<存档名>__20261027-183000.zip`，旁边一份同名 `.json` 记着存档名、所属实例、时间、文件数；备份目录也能改，面板里可直接打开',
+          '**保留份数可调**：默认每个存档留 10 份，旧的自动清掉；填 0 就是不删',
+          '**可恢复、可删除**：备份列表里逐份恢复 / 打开位置 / 删除（进回收站）。恢复前会先自动兜底一份「恢复前」的备份，手滑也回得去',
+          '**不耽误启动**：启动前最多花 20 秒、退出后最多 90 秒，超时剩下的下次再备；游戏正在运行时**拒绝恢复**，避免边玩边覆盖把存档写坏',
+          '备份是流式写盘的，备多大的存档都不会把内存吃满；打包时自动跳过 `session.lock` 这类不能碰的文件'
+        ]
+      },
+      {
+        icon: 'i-sync',
+        title: '新增 · 内置插件「模组清单对齐」',
+        items: [
+          '**联机页多了一张卡**：「好友联机」下面就是它 —— 选实例 → 生成我的清单 → 发给好友 → 比对',
+          '**清单走好友通道自动送达**：发出去对方在联机页会直接看到一行提示（不依赖复制粘贴，复制清单码也还能用）',
+          '**差异分三组**：对方有我没有 / 我有对方没有 / 同名但版本不一样，一眼看出该补什么、该换什么',
+          '有缺失时可以「复制缺失清单」，发给对方让他照着装',
+          '清单是纯文本（`XLC-MODS/1` 开头，每行 `哈希前 12 位 体积 文件名`），**只比对文件名和体积 + 前 4MB 的哈希，不上传任何模组内容**；手机拍的哈希只用来判断「是不是同一个文件」，不是完整性校验',
+          '联机前先对一遍清单，能省掉一大半「进去就掉线 / 方块对不上」的排查'
+        ]
+      },
+      {
+        icon: 'i-feedback',
+        title: '新增 · 侧边栏「反馈」变成独立页面',
+        items: [
+          '**不再一按就跳浏览器**：点侧边栏「反馈」，在启动器里就能看到反馈情况；要提新的再去网页，不用先被甩出去再找回来',
+          '**六档折叠列表**：正在处理 / 等待处理 / 等待 / 已完成 / 已忽略 / 重复，标题右边带数量角标，默认全部收起，点开才展开',
+          '条目行是 `#编号 · 标题 · 标签 · 多久之前`，点任意一条直接在浏览器打开对应的 Issue；每档按最后更新时间倒序排',
+          '**分档规则**（按仓库里的真实状态分，不靠人工维护）：`duplicate` 标签 → 重复；`wontfix` / `invalid` 或关闭时标了「不计划」→ 已忽略；已关闭 → 已完成；已指派或带 `processing` 标签 → 正在处理；有分类标签 → 等待处理；一个标签都没有 → 等待',
+          'PR 和字段不全的脏数据会被丢掉，不会在列表里出现半截条目',
+          '**两个出口**：「前往反馈」直接新建 Issue，「在 GitHub 查看全部」打开完整 Issue 列表 —— 页面上也写明了这里不是全部反馈',
+          '**自动刷新 + 缓存**：进页面自动拉一次，主进程缓存 10 分钟，点右上「刷新」强制重取；界面自己也缓存 5 分钟，来回切页不会反复请求',
+          '**拉不到不会空白**：断网或 GitHub 限流时，页面上写清原因（比如 403），并保留去网页的出口，不会只剩一片空白'
+        ]
+      },
+      {
+        icon: 'i-tools',
+        title: '改动 · 插件能改启动器页面了',
+        items: [
+          '新增「页面注入钩子」：内置插件可以往启动器的具体页面里插按钮和卡片（这次的两个插件就是），社区插件仍然进不了主窗口，边界没放开',
+          '钩子是**可重复执行**的：页面重绘后按钮还在，不会消失',
+          '插件停用后注入的东西立刻不见，异常也不会连累宿主页面崩溃'
+        ]
+      },
+      {
+        icon: 'i-stop',
+        title: '新增 · 下载可以中途停止',
+        items: [
+          '**下载中按钮就是「停止」**：下 MOD、整合包、资源包、光影包、数据包的时候，安装按钮会变成红色的「停止」，点一下立刻断',
+          '**停了是真停**：不会再偷偷换个镜像、换个 CDN 接着下，也不会自己再试第二轮 —— 以前点了没反应，就是因为它默默换了条路',
+          '**不留半截垃圾**：已经写下的临时文件（`.xlc-tmp`）一并清掉，不会在 mods 里留个打不开的坏包；停掉的任务号立刻作废，重新点安装是干净的一次',
+          '**提示说人话**：停完提示「已取消下载」，不是吓人的「安装失败」',
+          '正常下完、断网后重试这些老行为一条没变，只有你亲手点停止才会中断',
+          '**边界说清楚**：整合包里「装游戏本体」那一段停不下来，要等它装完；「MOD 一键更新」和「资源包批量更新」走的是另一条链路，这次还没接上'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '改动 · 没选版本装 MOD 会问你存哪',
+        items: [
+          '下载页「目标版本」停在「全部」时点安装，不再自己挑一个实例塞进去 —— 弹系统「选择保存位置」，文件名预填好，默认就在 mods 目录',
+          '想直接装进某个实例，就在「目标版本」里选它，行为跟以前一样，装完进游戏就能看到',
+          '在保存对话框点取消就什么都不做：不下载、不留半截文件、也不会误报「安装失败」'
+        ]
+      }
+    ]
+  },
+  {
     version: '1.2',
     date: '2026-10-26',
     tag: '正式版',
@@ -10884,6 +11394,51 @@ ipcMain.handle('diag:ai', async (_e, p) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+/* ================= 反馈页：把仓库 Issue 按处理状态分组 =================
+ * 界面（侧边栏「反馈」）不再直接甩浏览器，而是先给一页「正在处理 / 等待处理 / 等待 /
+ * 已完成 / 已忽略 / 重复」的汇总，和 PCL CE 的反馈页一个路数；要看全部或提交新反馈
+ * 再点按钮去 GitHub。
+ * GitHub 未登录接口限流 60 次/小时，所以结果在内存里缓存 10 分钟（点「刷新」可强制重取）。 */
+const FB_CORE = require('./src/feedback-core');
+const GH_ISSUES_API = 'https://api.github.com/repos/byzgdneo2/XLC-Launcher/issues?state=all&per_page=100&sort=updated&direction=desc';
+const FB_CACHE_MS = 10 * 60 * 1000;
+let feedbackCache = { at: 0, data: null };
+ipcMain.handle('feedback:list', async (_e, p) => {
+  const force = !!(p && p.force);
+  if (!force && feedbackCache.data && Date.now() - feedbackCache.at < FB_CACHE_MS) {
+    return Object.assign({}, feedbackCache.data, { cached: true });
+  }
+  try {
+    const r = await netFetch(GH_ISSUES_API, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'XLC-Launcher/' + APP_VERSION
+      }
+    }, 12000);
+    if (!r.ok) {
+      const why = (r.status === 403 || r.status === 429)
+        ? 'GitHub 接口限流了（未登录每小时 60 次），过一会儿再试'
+        : 'GitHub 返回 HTTP ' + r.status;
+      return { ok: false, error: why + '。也可以点「在 GitHub 查看全部」直接看网页。' };
+    }
+    const list = await r.json();
+    const sum = FB_CORE.feedbackSummarize(list);
+    const data = {
+      ok: true, fetchedAt: Date.now(), total: sum.total, groups: sum.groups,
+      repo: 'byzgdneo2/XLC-Launcher'
+    };
+    feedbackCache = { at: Date.now(), data };
+    return data;
+  } catch (e) {
+    return {
+      ok: false,
+      error: '取不到反馈列表：' + ((e && e.message) ? e.message : String(e)) +
+        '。可以点「在 GitHub 查看全部」直接看网页。'
+    };
+  }
+});
+
 /* 渲染层允许通过 config:save 覆盖的字段白名单；
    friends/friendCode/accounts/activeAccount/recent 等只能由主进程对应 handler 维护；
    updateUrl 已从白名单移除 —— 更新源锁定为官方地址，不再接受自定义。 */
@@ -10896,7 +11451,9 @@ const CONFIG_SAVE_WHITELIST = new Set([
      全局启动选项 + 游戏参数 + 启动前命令 + 限速 + 启动器可见性 + 显卡偏好 */
   'gameArgs', 'preLaunchCmd', 'winTitle', 'winSize', 'forceIsolate',
   'procPriority', 'launcherVisibility', 'gpuPref', 'speedLimit', 'turboMode',
-  'translatorBing'
+  'translatorBing',
+  /* 内置插件「存档备份」的设置（自动开关 / 时机 / 目录 / 保留份数） */
+  'backup'
 ]);
 /* 白名单声明后再取快照（CONFIG_IO_KEYS 曾放在声明前，TDZ 崩掉整个主进程） */
 const CONFIG_IO_KEYS = [...CONFIG_SAVE_WHITELIST];
@@ -10909,6 +11466,7 @@ ipcMain.handle('config:save', (_e, patch) => {
     filtered.aiApi = Object.assign({}, filtered.aiApi, { key: (config.aiApi && config.aiApi.key) || '' });
   }
   config = Object.assign({}, config, filtered);
+  if (filtered.backup) config.backup = SB_CORE.normalizeBackupCfg(config.backup);
   saveConfigNow();
   return configPublic();
 });
@@ -11148,6 +11706,16 @@ ipcMain.handle('friends:signal-poll', () => {
   const now = Date.now();
   const out = PRESENCE.signals.filter(s => now - (s.t || 0) < 90000);
   PRESENCE.signals = [];
+  /* 内置插件「模组清单对齐」：清单信令不跟界面轮询绑定 —— 就算当时人不在联机页
+     （甚至不在启动器前），也先存进收件箱，回来还能看到「谁发过清单」。 */
+  for (const s of out) {
+    if (s && s.type === 'modlist' && s.text) {
+      MODALIGN_INBOX.unshift({ from: s.from || '', name: s.name || '', text: String(s.text).slice(0, 200000), at: s.t || now });
+      if (MODALIGN_INBOX.length > 5) MODALIGN_INBOX.length = 5;
+      /* 推一条到界面：人正停在联机页时不用等下一次进页就能看到「谁发来清单」 */
+      try { send('modlist:received', { from: s.from || '', name: s.name || '', at: s.t || now }); } catch (_) {}
+    }
+  }
   return { ok: true, myCode: config.friendCode, signals: out };
 });
 ipcMain.handle('friends:signal-send', (_e, p) => {

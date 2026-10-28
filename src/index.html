@@ -112,7 +112,7 @@
       <button class="rail-btn" data-page="diag" title="诊断"><svg class="ic"><use href="#i-pulse"/></svg></button>
       <button class="rail-btn" data-page="import" title="导入"><svg class="ic"><use href="#i-import"/></svg></button>
       <button class="rail-btn" data-page="settings" title="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
-      <button class="rail-btn" id="btnFeedback" title="反馈（GitHub Issues）"><svg class="ic"><use href="#i-feedback"/></svg></button>
+      <button class="rail-btn" data-page="feedback" id="btnFeedback" title="反馈"><svg class="ic"><use href="#i-feedback"/></svg></button>
     </nav>
     <div class="rail-bottom">
       <div class="avatar" id="avatar" title="长按 10 秒开启极速模式">L</div>
@@ -255,7 +255,7 @@
               <button class="active" data-src="all" title="两个源一起搜，按下载量排序（默认）">综合</button>
             </div>
             <label class="field">
-              <span>目标版本（选「全部」则不筛版本）</span>
+              <span>目标版本（选「全部」则安装时选择保存位置）</span>
               <select id="resTarget"></select>
             </label>
           </div>
@@ -572,6 +572,95 @@
           <div class="plg-tip">
             <svg class="ic sm"><use href="#i-warn"/></svg>
             <span>生成的是<b>资源包</b>（放进 .minecraft/resourcepacks），进游戏后在「选项 → 资源包」里启用即可；不想用了删掉它就行，模组本体不受影响。翻译走在线接口、需要联网，第一次翻一个模组通常几十秒，翻过的文本会缓存，同一个模组再翻几乎秒出。模组自带的汉化不会被覆盖。</span>
+          </div>
+        </div>
+
+        <!-- 插件面板：存档备份 -->
+        <div id="plgBackup" style="display:none">
+          <div class="plg-head">
+            <button class="btn ghost icon-only" id="btnBkBack" title="返回插件列表"><svg class="ic sm"><use href="#i-x"/></svg></button>
+            <span class="plg-badge" style="--c:#14b8a6"><svg class="ic sm"><use href="#i-drive"/></svg></span>
+            <div class="plg-head-tx"><h2>存档备份</h2><p>把世界打包成 zip 存起来 · 启动前 / 退出后自动备份，炸档、误删、手滑都能捞回来</p></div>
+          </div>
+
+          <div class="card set-card">
+            <h3><svg class="ic sm"><use href="#i-clock"/></svg> 自动备份</h3>
+            <label class="check-row" style="margin:0 0 10px">
+              <input type="checkbox" id="bkAuto">
+              <span><b>开启自动备份</b> · 只备份「有变化」的存档，没动过的世界不会重复占空间</span>
+            </label>
+            <div class="field-line" style="margin-bottom:10px">
+              <label class="check-row" style="margin:0"><input type="checkbox" id="bkOnLaunch"><span>每次启动游戏前</span></label>
+              <label class="check-row" style="margin:0"><input type="checkbox" id="bkOnExit"><span>每次游戏退出后</span></label>
+            </div>
+            <label class="field" style="max-width:280px">
+              <span>每个存档最多保留几份备份（超出后自动删最旧的）</span>
+              <input type="number" id="bkKeep" min="0" max="99" step="1" value="10">
+            </label>
+            <p class="hint">填 <b>0</b> = 不自动删，全都留着（存档大的话会一直占空间）。备份默认存在 XLC 数据目录下的「存档备份」文件夹里。</p>
+            <div class="btn-row">
+              <button class="btn" id="bkSave"><svg class="ic sm"><use href="#i-check"/></svg> 保存设置</button>
+            </div>
+          </div>
+
+          <div class="card set-card">
+            <h3><svg class="ic sm"><use href="#i-folder"/></svg> 备份目录</h3>
+            <div class="field-line">
+              <input id="bkDir" type="text" readonly placeholder="读取中…">
+              <button class="btn ghost" id="bkReveal"><svg class="ic sm"><use href="#i-external"/></svg> 打开目录</button>
+            </div>
+            <p class="hint">目录固定在本程序的数据目录里，不跟着游戏目录走 —— 换游戏目录、重装游戏都不会丢备份。</p>
+          </div>
+
+          <div class="card set-card">
+            <h3><svg class="ic sm"><use href="#i-list"/></svg> 备份列表<span class="plg-tag" style="margin-left:8px">全部实例</span></h3>
+            <div class="btn-row" style="margin-bottom:10px">
+              <button class="btn primary" id="bkAll"><svg class="ic sm"><use href="#i-drive"/></svg> 立即备份全部存档</button>
+              <button class="btn ghost" id="bkRefresh"><svg class="ic sm"><use href="#i-refresh"/></svg> 刷新列表</button>
+            </div>
+            <div class="bk-list" id="bkList"><div class="empty-sm">读取备份目录…</div></div>
+          </div>
+
+          <div class="plg-tip">
+            <svg class="ic sm"><use href="#i-warn"/></svg>
+            <span>恢复时会先把<b>当前存档</b>再备一份（标签「恢复前兜底」），所以就算恢复错了也能回到恢复前的样子。备份只打包存档目录本身（region / level.dat / playerdata 等），不包含模组、资源包和设置文件；<b>session.lock</b> 会被跳过。</span>
+          </div>
+        </div>
+
+        <!-- 插件面板：模组清单对齐 -->
+        <div id="plgModalign" style="display:none">
+          <div class="plg-head">
+            <button class="btn ghost icon-only" id="btnMaBack" title="返回插件列表"><svg class="ic sm"><use href="#i-x"/></svg></button>
+            <span class="plg-badge" style="--c:#a855f7"><svg class="ic sm"><use href="#i-sync"/></svg></span>
+            <div class="plg-head-tx"><h2>模组清单对齐</h2><p>联机前先对一遍模组 · 谁少装了、谁版本不一样，一眼看清</p></div>
+          </div>
+
+          <div class="card set-card">
+            <h3><svg class="ic sm"><use href="#i-list"/></svg> 怎么用</h3>
+            <p class="hint">两边模组不一致是联机进不去 / 一进去就崩的第一大原因（开局报 <b>Missing or unsupported mods</b>）。流程就三步：</p>
+            <div class="ma-steps">
+              <div><b>1</b><span>在<b>联机页</b>点「生成我的清单」—— 只读文件名和体积，不上传任何模组文件</span></div>
+              <div><b>2</b><span>点「发给好友」（走好友通道自动送达），或者「复制」把清单文本发给对方</span></div>
+              <div><b>3</b><span>对方的清单会自动出现在联机页那张卡里，点「比对」看差在哪</span></div>
+            </div>
+            <div class="btn-row">
+              <button class="btn primary" id="maGoMp"><svg class="ic sm"><use href="#i-users"/></svg> 去联机页</button>
+              <button class="btn ghost" id="maGoFriend"><svg class="ic sm"><use href="#i-user-plus"/></svg> 加好友</button>
+            </div>
+          </div>
+
+          <div class="card set-card">
+            <h3><svg class="ic sm"><use href="#i-box"/></svg> 默认比对哪个实例</h3>
+            <label class="field" style="max-width:340px">
+              <span>进联机页时默认选中这个实例的模组</span>
+              <select id="maDefaultInst"></select>
+            </label>
+            <p class="hint">这里只是「比哪份模组」的默认值，不会改你启动游戏用的版本。选「（还没有安装版本）」时比对的是全局 .minecraft/mods。</p>
+          </div>
+
+          <div class="plg-tip">
+            <svg class="ic sm"><use href="#i-warn"/></svg>
+            <span>清单格式是 <b>XLC-MODS/1</b>：每行「sha1 前 12 位 + 体积 + 文件名」。哈希只取文件头 4 MB 和文件大小算，用来判断「是不是同一个文件」，<b>不用于校验完整性</b>，也不涉及模组内容。对方收到的清单只在内存里留最多 5 条、30 分钟。</span>
           </div>
         </div>
       </section>
@@ -990,6 +1079,9 @@
           <p class="hint">到「好友」页点击<b>在线好友</b>的「邀请联机」发起邀请。对方同意后双方自动进入联机房间：<b>发起方</b>在游戏里进入世界 → Esc → 「对局域网开放」，<b>受邀方</b>进游戏多人模式即可看到并加入对方的世界。</p>
         </div>
 
+        <!-- 内置插件注入区：插件往这里插卡片（模组清单对齐就在这），插件停用后自动空着 -->
+        <div id="mpPluginHost"></div>
+
         <!-- 版权标识：Terracotta 的 AGPL 例外条款要求在使用处明示其版权信息 -->
         <p class="third-party-note">
           联机功能由 <b>Terracotta（陶瓦联机）</b> 提供 · 版权归 burningtnt 及贡献者所有 ·
@@ -1040,6 +1132,27 @@
           <h3><svg class="ic"><use href="#i-warn"/></svg> 启动器崩溃记录</h3>
           <p class="diag-note">启动器自身异常退出（闪退、白屏、报错）会被自动记录，重启后在这里查看。</p>
           <div id="diagLaunchList"></div>
+        </div>
+      </section>
+
+      <!-- ===== 反馈页（照 PCL CE：说明 → 前往反馈 → 六档折叠列表） ===== -->
+      <section class="page" id="page-feedback">
+        <div class="page-head">
+          <div><h2>反馈</h2><p id="fbSub">Bug 与建议都收在这里 · 数据来自 GitHub Issues（缓存 10 分钟）</p></div>
+          <button class="ghost-btn" id="fbRefresh"><svg class="ic sm"><use href="#i-refresh"/></svg> 刷新</button>
+        </div>
+
+        <div class="card fb-note">
+          <p>在提交反馈之前，请先找一下是否存在<b>重复反馈</b>；如果有重复反馈，那么请不要再次提交反馈，这样会加剧维护者的负担。</p>
+          <p class="fb-tip">注意：此页面未展示所有的反馈，如需查看更多反馈，请前往 GitHub。</p>
+          <div class="fb-acts">
+            <button class="btn primary" id="fbGo"><svg class="ic sm"><use href="#i-feedback"/></svg> 前往反馈</button>
+            <button class="btn ghost" id="fbAll"><svg class="ic sm"><use href="#i-external"/></svg> 在 GitHub 查看全部</button>
+          </div>
+        </div>
+
+        <div class="fb-groups" id="fbGroups">
+          <div class="empty-sm">正在从 GitHub 取反馈列表…</div>
         </div>
       </section>
 

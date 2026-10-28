@@ -321,17 +321,110 @@ function gotoPage(name) {
   if (name.startsWith('plugin-')) ensurePluginWebview(name.slice('plugin-'.length));   /* 插件页面：首次进入才建 webview */
   if (name === 'download') requestAnimationFrame(() => moveTabInd($('#dlTabs'))); // 页面显示后再定位（隐藏时 offsetWidth 为 0）
   if (name === 'settings') refreshUpdatePane();
+  if (name === 'feedback') loadFeedback(false);
 }
 $$('#railNav .rail-btn').forEach(b => {
-  /* 无 data-page 的按钮（如「反馈」）不是页面入口，不进 gotoPage，各自单独挂事件 */
+  /* 没有 data-page 的按钮不是页面入口，各自单独挂事件（目前侧栏全部都有页面） */
   if (!b.dataset.page) return;
   b.addEventListener('click', () => gotoPage(b.dataset.page));
 });
-/* 侧边栏「反馈」：直接去 GitHub Issues（系统默认浏览器打开） */
-const FEEDBACK_URL = 'https://github.com/byzgdneo2/XLC-Launcher/issues';
-$('#btnFeedback').addEventListener('click', () => {
-  window.lmc.openUrl(FEEDBACK_URL).catch(() => {});
-});
+/* 侧边栏「反馈」现在是独立页面（照 PCL CE：说明 → 前往反馈 → 六档折叠列表），
+   不再一点就直接把浏览器甩出去；具体逻辑见下方 loadFeedback()。 */
+
+/* ---------------- 反馈页 ---------------- */
+const FB_ISSUES_URL = 'https://github.com/byzgdneo2/XLC-Launcher/issues';
+const FB_NEW_URL = 'https://github.com/byzgdneo2/XLC-Launcher/issues/new/choose';
+/* 六档顺序与 PCL CE 一致；key 与主进程 src/feedback-core.js 的分档结果一一对应 */
+const FB_GROUPS = [
+  { key: 'processing', name: '正在处理' },
+  { key: 'pending',    name: '等待处理' },
+  { key: 'waiting',    name: '等待' },
+  { key: 'done',       name: '已完成' },
+  { key: 'ignored',    name: '已忽略' },
+  { key: 'duplicate',  name: '重复' }
+];
+let fbData = null;          /* 上一次成功/失败的结果（页面来回切不重复请求） */
+let fbLoading = false;
+function fbAgo(ts) {
+  if (!ts) return '';
+  const d = Math.max(0, Date.now() - ts);
+  const min = Math.floor(d / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return min + ' 分钟前';
+  const h = Math.floor(min / 60);
+  if (h < 24) return h + ' 小时前';
+  const day = Math.floor(h / 24);
+  if (day < 30) return day + ' 天前';
+  return new Date(ts).toLocaleDateString('zh-CN');
+}
+function fbItemHtml(it) {
+  const tags = (it.labels || []).map(l => '<i class="fb-tag">' + esc(l) + '</i>').join('');
+  return '<div class="fb-item" data-url="' + esc(it.url) + '" title="' + esc(it.title) + '">' +
+    '<span class="fb-num">#' + (Number(it.n) || 0) + '</span>' +
+    '<span class="fb-title">' + esc(it.title) + '</span>' +
+    (tags ? '<span class="fb-tags">' + tags + '</span>' : '') +
+    '<span class="fb-time">' + esc(fbAgo(it.updatedAt)) + '</span>' +
+    '</div>';
+}
+function fbRender(data) {
+  const host = $('#fbGroups');
+  if (!host) return;
+  const sub = $('#fbSub');
+  if (!data || !data.ok) {
+    const msg = (data && data.error) ? data.error : '暂时取不到反馈列表';
+    host.innerHTML = '<div class="fb-fail">' + esc(msg) + '</div>';
+    if (sub) sub.textContent = '暂时连不上 GitHub · 可以点上面的按钮直接看网页';
+    return;
+  }
+  const groups = data.groups || {};
+  host.innerHTML = FB_GROUPS.map(g => {
+    const items = Array.isArray(groups[g.key]) ? groups[g.key] : [];
+    return '<details class="fb-group"' + (items.length ? '' : ' data-empty="1"') + '>' +
+      '<summary><span class="fb-gname">' + g.name + '</span>' +
+      '<span class="fb-gcount' + (items.length ? '' : ' zero') + '">' + items.length + '</span>' +
+      '<svg class="ic fb-chev"><use href="#i-chev-d"/></svg></summary>' +
+      '<div class="fb-list">' + (items.length
+        ? items.map(fbItemHtml).join('')
+        : '<div class="fb-empty">暂无</div>') + '</div>' +
+      '</details>';
+  }).join('');
+  /* 整块 innerHTML 重绘后旧元素脱离文档，必须重新取一遍再挂事件 */
+  $$('#fbGroups .fb-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const u = el.dataset.url;
+      if (u) window.lmc.openUrl(u).catch(() => {});
+    });
+  });
+  if (sub) {
+    const t = data.fetchedAt ? new Date(data.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+    sub.textContent = '共 ' + (Number(data.total) || 0) + ' 条 · ' + t + ' 取回' +
+      (data.cached ? '（缓存）' : '') + ' · 来源 GitHub Issues';
+  }
+}
+async function loadFeedback(force) {
+  const host = $('#fbGroups');
+  if (!host) return;
+  if (!force && fbData && fbData.ok && (Date.now() - (fbData._at || 0) < 5 * 60 * 1000)) { fbRender(fbData); return; }
+  /* 失败的结论也留 1 分钟：GitHub 连不上时反复切页，不该每次都去重试一遍（每次要等 12 秒超时） */
+  if (!force && fbData && !fbData.ok && (Date.now() - (fbData._at || 0) < 60 * 1000)) { fbRender(fbData); return; }
+  if (fbLoading) return;
+  fbLoading = true;
+  const btn = $('#fbRefresh');
+  if (btn) btn.disabled = true;
+  if (!fbData) host.innerHTML = '<div class="empty-sm">正在从 GitHub 取反馈列表…</div>';
+  let d;
+  try { d = await window.lmc.feedbackList({ force: !!force }); }
+  catch (e) { d = { ok: false, error: '取不到反馈列表：' + ((e && e.message) ? e.message : String(e)) }; }
+  d = d || { ok: false, error: '取不到反馈列表' };
+  d._at = Date.now();
+  fbData = d;
+  fbLoading = false;
+  if (btn) btn.disabled = false;
+  fbRender(d);
+}
+$('#fbGo').addEventListener('click', () => { window.lmc.openUrl(FB_NEW_URL).catch(() => {}); });
+$('#fbAll').addEventListener('click', () => { window.lmc.openUrl(FB_ISSUES_URL).catch(() => {}); });
+$('#fbRefresh').addEventListener('click', () => loadFeedback(true));
 
 /* ---------------- 窗口控制 ---------------- */
 $('#btnMin').addEventListener('click', () => window.lmc.win.minimize());
@@ -897,8 +990,9 @@ function refreshAuxSelects() {
   const opts = (list) => list.map(v => '<option value="' + esc(v.id) + '">' +
     esc(v.id) + (v.loader !== 'Vanilla' ? ' (' + esc(v.loader) + ')' : '') + '</option>').join('');
   /* 目标版本：首项固定为「全部」（不筛 MC 版本与加载器，全站资源都能看到、都能直接安装）
-   * 默认停在「全部」—— 下载时不需要先装版本；想按版本筛适配再手动选具体实例 */
-  target.innerHTML = '<option value="__all__">全部</option>' + (opts(withLoader.concat(rest)) || '<option value="">（无已安装版本）</option>');
+   * 默认停在「全部」—— 下载时不需要先装版本；装 MOD 时会弹「选择保存位置」让你自己挑目录，
+   * 选了具体实例才直接装进该实例的 mods */
+  target.innerHTML = '<option value="__all__">全部（安装时选择保存位置）</option>' + (opts(withLoader.concat(rest)) || '<option value="">（无已安装版本）</option>');
   /* 数据包存档下拉：实例隔离存档 value = "实例|世界名"，安装时写入实例目录的 datapacks */
   dw.innerHTML = S.saves.map(s =>
     '<option value="' + esc(s.instance ? s.instance + '|' + s.name : s.name) + '">' +
@@ -1225,6 +1319,9 @@ async function showSaveDetail(w) {
   });
   $('#sdFolder').addEventListener('click', () => window.lmc.openPath(w.path));
   $('#sdDel').addEventListener('click', () => deleteSave(w));
+  /* 内置插件往这里插按钮（存档备份 → 「打开目录」右边多一个「备份存档」）。
+     详情每次都是整块重绘，钩子每次都得重跑；插件停用了 runUiHooks 自己会跳过。 */
+  runUiHooks('saveDetail', { save: w });
   const box = $('#saveMapBox');
   /* ⚠️ 别在这里拿列表扫描时缓存的 w.hasRegion 提前返回（那份快照是启动/上次刷新时扫的，
      而玩家随时会进世界、随手导入存档）。统一走 renderMap()，由主进程现场检测区块文件；
@@ -2271,15 +2368,22 @@ function setLat(elm, r) {
 
 /* ---------------- MOD / 整合包下载页（Modrinth，两页共用内核） ---------------- */
 const RES_PAGE_SIZE = 20;
-/* 「全部」模式下自动挑一个能装 MOD 的实例：默认实例优先，其次最近启动过的带加载器实例 */
-function pickModInstance() {
-  const LD_OK = ['fabric', 'forge', 'quilt', 'neoforge'];
-  const okList = S.installed.filter(v => v.loader && LD_OK.includes(String(v.loader).toLowerCase()));
-  if (!okList.length) return '';
-  const def = S.config && S.config.defaultVersion;
-  if (def && okList.some(v => v.id === def)) return def;
-  if (S.config && S.config.lastVersion && okList.some(v => v.id === S.config.lastVersion)) return S.config.lastVersion;
-  return okList[0].id;
+/* 注：以前「全部」模式会用 pickModInstance() 自动挑一个带加载器的实例装进去。
+   现在不猜了 —— 没选版本就弹「选择保存位置」让用户自己挑（PCL 同款），见 installModPicked。 */
+/* 下载期间的「停止」：把安装按钮临时变成「停止」，点击打断主进程里对应 jobKey 的下载。
+   按钮本体还挂着原来的安装 listener，所以下载期间要靠 dataset.busy 挡住二次触发 ——
+   再点一下时先命中 busy 早退，随后才轮到这里挂的 stop listener 去执行取消。 */
+function armDlStop(btn, jobKey) {
+  const stop = () => window.lmc.downloadCancel(jobKey);
+  btn.disabled = false;
+  btn.textContent = '停止';
+  btn.classList.add('stop');       /* 换成红描边：此刻点它是打断，不是再装一次 */
+  btn.addEventListener('click', stop);
+  return function disarm() {
+    btn.removeEventListener('click', stop);
+    btn.classList.remove('stop');
+    delete btn.dataset.busy;
+  };
 }
 function setupResPage(cfg) {
   let query = '', timer = null, page = 1, total = 0, fallback = false;
@@ -2427,53 +2531,84 @@ function setupResPage(cfg) {
       const dbtn = el('button', 'btn ghost', '详情');
       dbtn.addEventListener('click', () => openResDetail(h, itemSrc(h), cfg.targetSel, typeName, cfg.type));
       btn.addEventListener('click', async () => {
+        if (btn.dataset.busy === '1') return;   /* 下载期间点「停止」会再次进来：被忙标记挡住 */
         if (cfg.type === 'mod') {
-          let t = $(cfg.targetSel).value;
-          /* 选「全部」时没有指定实例：自动挑一个能装 MOD 的实例（优先默认实例，其次最近启动过的带加载器实例） */
-          if (t === '__all__') {
-            t = pickModInstance();
-            if (!t) { toast('还没有带模组加载器的版本 —— 请先到「下载」页安装一个 Fabric / Forge / NeoForge 版本，或在上方「目标版本」里指定一个', 'warn'); return; }
+          const t = $(cfg.targetSel).value;
+          /* 停在「全部」= 没指定装到哪个实例：不替用户猜，弹「选择保存位置」让他自己挑（PCL 同款）。
+             选了具体实例才直接装进该实例的 mods。 */
+          const pickPath = !t || t === '__all__';
+          if (!pickPath) {
+            const ti2 = S.installed.find(v => v.id === t);
+            if (ti2 && (ti2.loader === 'Vanilla' || !ti2.loader)) {
+              toast('「' + t + '」是原版（无模组加载器），MOD 无法生效 —— 请先安装 Fabric / Forge 版本', 'warn');
+              return;
+            }
           }
-          if (!t) { toast('请先安装一个版本', 'warn'); return; }
-          const ti2 = S.installed.find(v => v.id === t);
-          if (ti2 && (ti2.loader === 'Vanilla' || !ti2.loader)) {
-            toast('「' + t + '」是原版（无模组加载器），MOD 无法生效 —— 请先安装 Fabric / Forge 版本', 'warn');
-            return;
-          }
-          btn.disabled = true; btn.textContent = '下载中…';
-          const rr = await window.lmc.modrinthInstallMod({ projectId: h.id, versionId: t, instance: t, source: itemSrc(h) });
+          btn.dataset.busy = '1';
+          btn.disabled = true; btn.textContent = pickPath ? '选择保存位置…' : '下载中…';
+          const jkMod = 'mod|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+          const disarm = armDlStop(btn, jkMod);
+          const rr = await window.lmc.modrinthInstallMod(pickPath
+            ? { projectId: h.id, source: itemSrc(h), jobKey: jkMod, pickPath: true }
+            : { projectId: h.id, versionId: t, instance: t, source: itemSrc(h), jobKey: jkMod });
+          disarm();
           btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装';
-          if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          if (rr.canceled) toast('已取消', 'warn');
+          else if (rr.cancelled) toast('已取消下载', 'warn');
+          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          else if (rr.saved) toast('已保存到 ' + rr.path);
           else toast('已装入 ' + t + '：' + rr.file);
         } else if (cfg.type === 'modpack') {
+          btn.dataset.busy = '1';
           btn.disabled = true; btn.textContent = '下载安装中…';
-          const rr = await window.lmc.modrinthInstallModpack({ projectId: h.id, name: h.title });
+          const jkMp = 'modpack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+          const disarmMp = armDlStop(btn, jkMp);
+          const rr = await window.lmc.modrinthInstallModpack({ projectId: h.id, name: h.title, jobKey: jkMp });
+          disarmMp();
           dlTaskFinish(!!rr.ok, rr.error || '');
-          if (!rr.ok) { toast('安装失败: ' + rr.error, 'error'); btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包'; return; }
+          if (!rr.ok) {
+            toast(rr.cancelled ? '已取消下载' : '安装失败: ' + rr.error, rr.cancelled ? 'warn' : 'error');
+            btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包'; return;
+          }
           await scanDir();
           selectVersion(rr.versionId, true);
           toast('整合包就绪: ' + rr.versionId);
         } else if (cfg.type === 'resourcepack') {
+          btn.dataset.busy = '1';
           btn.disabled = true; btn.textContent = '下载中…';
-          const rr = await window.lmc.modrinthInstallPack({ type: 'resourcepack', projectId: h.id });
+          const jkRp = 'resourcepack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+          const disarmRp = armDlStop(btn, jkRp);
+          const rr = await window.lmc.modrinthInstallPack({ type: 'resourcepack', projectId: h.id, jobKey: jkRp });
+          disarmRp();
           btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装资源包';
-          if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          if (rr.cancelled) toast('已取消下载', 'warn');
+          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
         } else if (cfg.type === 'shader') {
           /* 目标版本选「全部」→ 不指定实例，装到游戏根目录的 shaderpacks */
           const rawT = cfg.targetSel ? $(cfg.targetSel).value : '';
           const inst = rawT === '__all__' ? '' : rawT;
+          btn.dataset.busy = '1';
           btn.disabled = true; btn.textContent = '下载中…';
-          const rr = await window.lmc.modrinthInstallPack({ type: 'shader', projectId: h.id, instance: inst, source: itemSrc(h) });
+          const jkSh = 'shader|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+          const disarmSh = armDlStop(btn, jkSh);
+          const rr = await window.lmc.modrinthInstallPack({ type: 'shader', projectId: h.id, instance: inst, source: itemSrc(h), jobKey: jkSh });
+          disarmSh();
           btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装光影';
-          if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          if (rr.cancelled) toast('已取消下载', 'warn');
+          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
           else toast('光影已装到 ' + (inst || '游戏根目录') + '：' + rr.file + '（游戏内用 Iris / OptiFine 选中即可生效）');
         } else { // datapack
           const w = cfg.targetSel ? $(cfg.targetSel).value : '';
           if (!w) { toast('请先选择一个存档（世界）', 'warn'); return; }
+          btn.dataset.busy = '1';
           btn.disabled = true; btn.textContent = '下载中…';
-          const rr = await window.lmc.modrinthInstallPack({ type: 'datapack', projectId: h.id, world: w });
+          const jkDp = 'datapack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+          const disarmDp = armDlStop(btn, jkDp);
+          const rr = await window.lmc.modrinthInstallPack({ type: 'datapack', projectId: h.id, world: w, jobKey: jkDp });
+          disarmDp();
           btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 装入选中存档';
-          if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          if (rr.cancelled) toast('已取消下载', 'warn');
+          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
         }
       });
       act.appendChild(dbtn);
@@ -4039,7 +4174,7 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
   const fileDest = kindName === 'datapack' ? '所选存档的 datapacks'
     : kindName === 'shader' ? '所选实例的 shaderpacks（选「全部」则放游戏根目录）'
       : kindName === 'resourcepack' ? '游戏目录的 resourcepacks'
-        : allMode ? '自动选择的实例' : '目标实例';
+        : allMode ? '你自己选的保存位置' : '目标实例';
   const filesHtml = (r.files && r.files.length)
     ? '<div class="md-files"><div class="md-sec">适配 ' + esc(tid || '全部版本') + ' 的文件（最新 ' + r.files.length + ' 个，点击行内按钮安装到' + esc(fileDest) + '）</div>' +
       r.files.map((f, i) =>
@@ -4082,33 +4217,52 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
     }).catch(() => {});
   }
   modalBox.querySelectorAll('button.md-fi').forEach(b => b.addEventListener('click', async () => {
+    if (b.dataset.busy === '1') return;   /* 下载期间点「停止」会再次进来：被忙标记挡住 */
     const f = r.files[+b.dataset.fi];
     let tgt = tid;
     if (kindName === 'mod') {
-      /* 「全部」模式下未指定实例 → 自动挑一个带加载器的实例；其余情况必须显式指定 */
-      if (!tgt) {
-        if (!allMode) { toast('请先在下载页选择目标版本', 'warn'); return; }
-        tgt = pickModInstance();
-        if (!tgt) { toast('还没有带模组加载器的版本 —— 请先安装一个 Fabric / Forge / NeoForge 版本', 'warn'); return; }
+      /* 没指定实例（目标版本停在「全部」）→ 弹「选择保存位置」自己挑，不替用户猜 */
+      const pickPath = !tgt;
+      if (!pickPath) {
+        const ti2 = S.installed.find(v => v.id === tgt);
+        if (ti2 && (ti2.loader === 'Vanilla' || !ti2.loader)) {
+          toast('「' + tgt + '」是原版（无模组加载器），MOD 无法生效 —— 请先安装 Fabric / Forge 版本', 'warn');
+          return;
+        }
       }
-      b.disabled = true; b.textContent = '下载中…';
-      const rr = await window.lmc.modrinthInstallMod({ projectId: h.id, versionId: tgt, instance: tgt, source, fileRef: f.ref });
+      b.dataset.busy = '1';
+      b.disabled = true; b.textContent = pickPath ? '选择保存位置…' : '下载中…';
+      const jk = 'mod|' + h.id + '|' + f.ref + '|' + Math.random().toString(36).slice(2, 8);
+      const disarm = armDlStop(b, jk);
+      const rr = await window.lmc.modrinthInstallMod(pickPath
+        ? { projectId: h.id, source, fileRef: f.ref, jobKey: jk, pickPath: true }
+        : { projectId: h.id, versionId: tgt, instance: tgt, source, fileRef: f.ref, jobKey: jk });
+      disarm();
       b.disabled = false; b.textContent = '安装';
-      if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+      if (rr.canceled) toast('已取消', 'warn');
+      else if (rr.cancelled) toast('已取消下载', 'warn');
+      else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+      else if (rr.saved) toast('已保存到 ' + rr.path);
       else toast('已装入 ' + tgt + '：' + rr.file);
       return;
     }
     /* 数据包必须选中存档；资源包 / 光影装到各自固定目录（光影 tid 为空即游戏根目录，不必挑实例） */
     if (kindName === 'datapack' && !tgt) { toast('请先在下载页选择一个存档（世界）', 'warn'); return; }
+    b.dataset.busy = '1';
     b.disabled = true; b.textContent = '下载中…';
+    const jkP = kindName + '|' + h.id + '|' + f.ref + '|' + Math.random().toString(36).slice(2, 8);
+    const disarmP = armDlStop(b, jkP);
     const rr = await window.lmc.modrinthInstallPack({
       type: kindName, projectId: h.id, source,
       world: kindName === 'datapack' ? tgt : '',
       instance: kindName === 'shader' ? tgt : '',
-      fileRef: f.ref
+      fileRef: f.ref,
+      jobKey: jkP
     });
+    disarmP();
     b.disabled = false; b.textContent = '安装';
-    if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+    if (rr.cancelled) toast('已取消下载', 'warn');
+    else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
     else toast('已安装：' + rr.file);
   }));
 }
@@ -4845,6 +4999,9 @@ function mpStopPolling() {
   MP.lastState = ''; MP.lastIndex = -1;
 }
 async function mpOnEnter() {
+  /* 内置插件注入的卡片先画出来：联机组件没装时也要能看到「模组清单对齐」
+     （用户在装组件之前就该知道该对模组，不该等装完才出现） */
+  try { renderMpPluginHost(); } catch (_) {}
   const st = await window.lmc.mpStatus().catch(() => null);
   if (!st || !st.ok || !st.installed) {
     $('#mpSetup').style.display = ''; $('#mpMain').style.display = 'none';
@@ -5276,6 +5433,16 @@ const PLUGIN_DEFS = [
   {
     id: 'translator', name: '模组翻译器', ver: '1.0.0', tag: '工具', ic: '#i-globe', color: '#0ea5e9',
     desc: '上传一个模组 JAR，把里面的英文文本翻成中文，生成一个汉化资源包；不改原模组、不占多少内存，翻过的文本会缓存。'
+  },
+  {
+    id: 'savebackup', name: '存档备份', ver: '1.0.0', tag: '存档', ic: '#i-drive', color: '#14b8a6',
+    /* 这两个插件的特别之处：它们会往宿主页面里插东西（存档详情 / 联机页），
+       不是单纯一个独立面板 —— 卡片说明里讲清楚，用户才知道“打开”之后会看到什么 */
+    desc: '在存档详情里加一个「备份存档」，一键把整个世界打包；还能开自动备份（启动前 / 退出后只备变过的存档），默认存到 XLC数据。'
+  },
+  {
+    id: 'modalign', name: '模组清单对齐', ver: '1.0.0', tag: '联机', ic: '#i-sync', color: '#a855f7',
+    desc: '在联机页比对两边的模组清单：少了哪些、多了哪些、哪些版本不同。清单可以通过好友通道直接发给对方，也能复制粘贴。'
   }
 ];
 const PLG = { on: {}, pane: '', third: [] };
@@ -5463,7 +5630,7 @@ function ensurePluginWebview(id) {
 }
 
 /* 插件面板 id → DOM 容器（新增内置插件面板时在这里登记一行） */
-const PLG_PANES = { seedmap: '#plgSeedmap', server: '#plgServer', gamepad: '#plgGamepad', translator: '#plgTranslator' };
+const PLG_PANES = { seedmap: '#plgSeedmap', server: '#plgServer', gamepad: '#plgGamepad', translator: '#plgTranslator', savebackup: '#plgBackup', modalign: '#plgModalign' };
 function plgShowPane(which) {
   $('#plgHome').style.display = which ? 'none' : '';
   for (const k of Object.keys(PLG_PANES)) {
@@ -5482,6 +5649,8 @@ function openPlugin(id) {
   else if (id === 'server') initServerPane();
   else if (id === 'gamepad') initGamepadPane();
   else if (id === 'translator') initTranslatorPane();
+  else if (id === 'savebackup') initBackupPane();
+  else if (id === 'modalign') initModalignPane();
   /* 打开面板后把焦点落到第一个控件，纯手柄也能继续操作 */
   if (typeof gpResetFocus === 'function') gpResetFocus();
 }
@@ -5490,6 +5659,427 @@ function closePlugin() {
   plgShowPane('');
   if (typeof gpResetFocus === 'function') gpResetFocus();
 }
+
+/* ================================================================
+ * 内置插件的「页面注入」（1.3 起）
+ * ================================================================
+ * 之前插件只有两种形态：插件页里的独立面板（内置）、独立窗口（社区）。
+ * 「存档备份」「模组清单对齐」要的是第三种 —— 往宿主页面的指定位置插自己的按钮 / 卡片：
+ *   · 存档详情弹窗：「打开目录」右边多一个「备份存档」
+ *   · 联机页：多一张「模组清单对齐」卡片
+ *
+ * 约定（别破坏）：
+ *   1. **只有内置插件能注册钩子**。社区插件依旧进不了主窗口 DOM，安全边界没放开。
+ *   2. 钩子必须可重复执行：存档详情每次都是重新 innerHTML 出来的，每次渲染都会重跑；
+ *      自己先判断「宿主元素在不在 / 是不是已经插过」（免得插两个按钮）。
+ *   3. 插件停用后钩子不再执行（pluginOn）；已挂的东西随宿主重绘自然消失。
+ *   4. 钩子里抛异常只打日志，绝不能把宿主页面一起搞崩。
+ */
+const UI_HOOKS = { saveDetail: [], mpPage: [] };
+function uiHook(name, pluginId, fn) { (UI_HOOKS[name] || (UI_HOOKS[name] = [])).push({ pluginId, fn }); }
+/* 插件是否在用：以插件页拉到的那份 PLG.on 为准（开关一改立刻生效），
+   还没拉到（用户没进过插件页）时退回配置里的 plugins 字段 —— 别只看其中一处：
+   只读 S.config 会让「停用后钩子还在」；只读 PLG.on 会在没进过插件页时把停用的插件当启用。 */
+function pluginOn(id) {
+  if (PLG.on && PLG.on[id] !== undefined) return PLG.on[id] !== false;
+  return !(S.config && S.config.plugins && S.config.plugins[id] === false);
+}
+function runUiHooks(name, ctx) {
+  for (const h of (UI_HOOKS[name] || [])) {
+    if (!pluginOn(h.pluginId)) continue;
+    try { h.fn(ctx); } catch (e) { console.warn('[hook] ' + name + ' / ' + h.pluginId, e); }
+  }
+}
+async function copyToClipboard(txt) {
+  try { await navigator.clipboard.writeText(txt); return true; } catch (_) {}
+  try { return !!(await window.lmc.copyText(txt)); } catch (_) { return false; }
+}
+
+/* ================================================================
+ * 内置插件：存档备份
+ * ================================================================
+ * 界面两处：存档详情里的「备份存档」按钮（钩子）+ 插件页里的设置与备份列表。
+ * 真正的打包 / 恢复在 main.js（流式 zip，src/zip-write.js）。
+ */
+let BK_CFG = null;
+/* 自动备份跑完了（启动前 / 退出后）：给一句「备了哪几个世界」，别让它悄悄发生。
+   退出后那次是窗口恢复之后才跑的，用户正好能看到这条提示。 */
+window.lmc.on('backup:auto-done', (d) => {
+  const items = (d && d.items) || [];
+  if (!items.length) return;
+  const names = items.slice(0, 3).map(x => x.name).join('、') + (items.length > 3 ? ' 等 ' + items.length + ' 个' : '');
+  toast('已自动备份 ' + names + '（' + ((d && d.phase) === 'launch' ? '启动前' : '退出后') + '）');
+});
+async function bkLoadCfg() {
+  try {
+    const c = await window.lmc.getConfig();
+    if (c) S.config = c;
+  } catch (_) {}
+  BK_CFG = (S.config && S.config.backup) || { auto: false, onLaunch: true, onExit: true, dir: '', keep: 10 };
+  return BK_CFG;
+}
+async function bkSaveCfg(patch) {
+  const next = Object.assign({ auto: false, onLaunch: true, onExit: true, dir: '', keep: 10 }, BK_CFG || {}, patch);
+  try {
+    const c = await window.lmc.saveConfig({ backup: next });
+    if (c) S.config = c;
+    BK_CFG = (c && c.backup) || next;
+    return true;
+  } catch (e) { toast('保存失败：' + e.message, 'error'); return false; }
+}
+
+/* 存档详情：「打开目录」右边插一个「备份存档」（删除按钮之前，保持危险操作在最右） */
+uiHook('saveDetail', 'savebackup', ({ save }) => {
+  const row = document.querySelector('#savesDetail .sc-btns');
+  if (!row || row.querySelector('#sdBackup')) return;
+  const btn = el('button', 'btn ghost', '<svg class="ic sm"><use href="#i-drive"/></svg> 备份存档');
+  btn.id = 'sdBackup';
+  btn.title = '把这个世界打包成 zip 存到备份目录（原存档不动）';
+  row.insertBefore(btn, row.querySelector('#sdDel') || null);
+  btn.addEventListener('click', async () => {
+    const old = btn.innerHTML;
+    btn.disabled = true; btn.textContent = '备份中…';
+    const r = await window.lmc.savesBackup({ name: save.name, instance: save.instance || '', tag: 'manual' });
+    btn.disabled = false; btn.innerHTML = old;
+    if (!r || !r.ok) { toast('备份失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
+    toast('已备份「' + save.name + '」：' + r.files + ' 个文件 · ' + fmtSizeB(r.bytes));
+  });
+});
+
+function bkFmtTime(ts) {
+  const d = new Date(ts);
+  return d.getFullYear() + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0') +
+    ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+const BK_TAG = { 'auto-launch': '自动 · 启动前', 'auto-exit': '自动 · 退出后', 'before-restore': '恢复前兜底', 'manual': '手动', 'manual-all': '手动 · 全部' };
+
+async function bkRefreshList() {
+  const box = $('#bkList');
+  if (!box) return;
+  box.innerHTML = '<div class="empty-sm">读取备份目录…</div>';
+  const r = await window.lmc.savesBackups();
+  if (!r || !r.ok) { box.innerHTML = '<div class="empty-sm">读取失败：' + esc((r && r.error) || '未知错误') + '</div>'; return; }
+  BK_CFG = r.cfg || BK_CFG;
+  const dirEl = $('#bkDir');
+  if (dirEl) dirEl.value = r.root || '';
+  if (!r.items.length) {
+    box.innerHTML = '<div class="empty-sm">还没有备份。到「存档管理」里点某个存档 → 备份存档，或把上面的自动备份打开。</div>';
+    return;
+  }
+  const rows = r.items.map(it =>
+    '<div class="bk-row">' +
+      '<div class="bk-main"><b>' + esc(it.save) + '</b>' +
+        '<span class="bk-sub">' + esc(bkFmtTime(it.at)) + ' · ' + fmtSizeB(it.bytes) +
+        (it.files ? ' · ' + it.files + ' 个文件' : '') +
+        (it.instance ? ' · 实例 ' + esc(it.instance) : '') +
+        (BK_TAG[it.tag] ? ' · ' + BK_TAG[it.tag] : '') + '</span></div>' +
+      '<div class="bk-acts">' +
+        '<button class="btn ghost" data-bk-restore="' + esc(it.file) + '">恢复</button>' +
+        '<button class="btn ghost" data-bk-open="' + esc(it.file) + '">查看</button>' +
+        '<button class="btn ghost danger-ghost" data-bk-del="' + esc(it.file) + '">删除</button>' +
+      '</div>' +
+    '</div>').join('');
+  box.innerHTML = rows;
+  $$('#bkList [data-bk-restore]').forEach(b => b.addEventListener('click', async () => {
+    const file = b.dataset.bkRestore;
+    const name = (file.split(/[\\/]/).pop() || '').split('__')[0];
+    if (!(await askConfirm('用这份备份覆盖存档「' + name + '」？', {
+      okText: '恢复', detail: '恢复前会先把当前存档再备一份（标签「恢复前兜底」），所以就算点错了也能回到现在的样子。'
+    }))) return;
+    b.disabled = true; b.textContent = '恢复中…';
+    const r2 = await window.lmc.savesRestore({ file });
+    b.disabled = false; b.textContent = '恢复';
+    if (!r2 || !r2.ok) { toast('恢复失败：' + ((r2 && r2.error) || '未知错误'), 'error'); return; }
+    toast('已恢复「' + r2.name + '」：' + r2.files + ' 个文件');
+    await scanDir();
+    bkRefreshList();
+  }));
+  $$('#bkList [data-bk-open]').forEach(b => b.addEventListener('click', () => window.lmc.openPath(b.dataset.bkOpen)));
+  $$('#bkList [data-bk-del]').forEach(b => b.addEventListener('click', async () => {
+    const file = b.dataset.bkDel;
+    if (!(await askConfirm('删除这份备份？', { danger: true, okText: '删除', detail: '备份文件会移入系统回收站（还能捞回来），原存档不受影响。' }))) return;
+    const r2 = await window.lmc.savesBackupDelete({ file });
+    if (!r2 || !r2.ok) { toast('删除失败：' + ((r2 && r2.error) || '未知错误'), 'error'); return; }
+    toast('备份已移入回收站', 'warn');
+    bkRefreshList();
+  }));
+}
+
+async function initBackupPane() {
+  const cfg = await bkLoadCfg();
+  $('#bkAuto').checked = !!cfg.auto;
+  $('#bkOnLaunch').checked = cfg.onLaunch !== false;
+  $('#bkOnExit').checked = cfg.onExit !== false;
+  $('#bkKeep').value = cfg.keep;
+  if (!document.querySelector('#plgBackup').dataset.wired) {
+    document.querySelector('#plgBackup').dataset.wired = '1';
+    $('#btnBkBack').addEventListener('click', closePlugin);
+    $('#bkReveal').addEventListener('click', async () => {
+      const r = await window.lmc.savesBackupReveal();
+      if (!r || !r.ok) toast('打开失败：' + ((r && r.error) || '未知错误'), 'error');
+    });
+    $('#bkRefresh').addEventListener('click', bkRefreshList);
+    $('#bkAll').addEventListener('click', async (ev) => {
+      const b = ev.currentTarget;
+      b.disabled = true; b.textContent = '备份中…';
+      const r = await window.lmc.savesBackupAll();
+      b.disabled = false; b.innerHTML = '<svg class="ic sm"><use href="#i-drive"/></svg> 立即备份全部存档';
+      if (!r || !r.ok) { toast('备份失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
+      toast('已备份 ' + r.items.length + ' 个存档');
+      bkRefreshList();
+    });
+    $('#bkSave').addEventListener('click', async () => {
+      const okSaved = await bkSaveCfg({
+        auto: $('#bkAuto').checked,
+        onLaunch: $('#bkOnLaunch').checked,
+        onExit: $('#bkOnExit').checked,
+        keep: parseInt($('#bkKeep').value, 10) || 0
+      });
+      if (okSaved) toast('存档备份设置已保存');
+    });
+    /* 关掉自动备份时把两个时机也灰掉，避免「看着能勾但没意义」 */
+    const syncAutoUi = () => {
+      const on = $('#bkAuto').checked;
+      $('#bkOnLaunch').disabled = !on;
+      $('#bkOnExit').disabled = !on;
+    };
+    $('#bkAuto').addEventListener('change', syncAutoUi);
+    syncAutoUi();
+  }
+  bkRefreshList();
+}
+
+/* ================================================================
+ * 内置插件：模组清单对齐
+ * ================================================================
+ * 主界面在联机页（钩子插卡片），插件面板里放说明与默认实例。
+ * 清单文本由主进程扫描 mods 目录生成（sha1 前 12 位 + 体积 + 文件名），
+ * 走好友通道（MQTT 信令）或复制粘贴送到对方，差异计算也在主进程（纯函数）。
+ */
+const MA_STATE = { mine: '', count: 0, instance: '', result: null, peer: '', preferInst: '' };
+
+/* 实例下拉的 <option> 串（两个面板共用，id 由调用方给外层 select） */
+function maInstanceOptionsHtml() {
+  const list = (S.installed || []).slice();
+  return list.map(v => '<option value="' + esc(v.id) + '">' + esc(v.id) +
+    (v.loader && v.loader !== 'Vanilla' ? ' · ' + esc(v.loader) : '') + '</option>').join('') ||
+    '<option value="">（还没有安装版本）</option>';
+}
+function maDefaultInst() {
+  return MA_STATE.preferInst || (S.config && (S.config.defaultVersion || S.config.lastVersion)) || '';
+}
+
+function maRenderResult(box) {
+  const d = MA_STATE.result;
+  if (!box) return;
+  if (!d) { box.innerHTML = ''; return; }
+  if (!d.ok) { box.innerHTML = '<div class="empty-sm">' + esc(d.error || '比对失败') + '</div>'; return; }
+  const block = (title, arr, render) => arr.length
+    ? '<div class="ma-block"><b>' + title + '（' + arr.length + '）</b>' + arr.map(render).join('') + '</div>' : '';
+  const rows = [];
+  rows.push('<div class="ma-sum">' + esc(MA_SUMMARY()) + '</div>');
+  rows.push(block('对方有、你没有', d.missing, m =>
+    '<div class="ma-item"><span class="ma-name">' + esc(m.name) + '</span><span class="ma-size">' + (m.size ? fmtSizeB(m.size) : '') + '</span></div>'));
+  rows.push(block('你有、对方没有', d.extra, m =>
+    '<div class="ma-item"><span class="ma-name">' + esc(m.name) + '</span><span class="ma-size">' + (m.size ? fmtSizeB(m.size) : '') + '</span></div>'));
+  rows.push(block('同名但版本不同', d.differ, x =>
+    '<div class="ma-item"><span class="ma-name">' + esc(x.name) + '</span><span class="ma-size">版本 / 来源不一样</span></div>'));
+  if (d.missing.length) {
+    rows.push('<div class="btn-row"><button class="btn ghost" id="maCopyMissing"><svg class="ic sm"><use href="#i-list"/></svg> 复制缺失清单</button></div>');
+  }
+  box.innerHTML = rows.join('');
+  const cm = $('#maCopyMissing');
+  if (cm) cm.addEventListener('click', async () => {
+    const txt = d.missing.map(m => m.name).join('\n');
+    toast((await copyToClipboard(txt)) ? '缺失清单已复制（' + d.missing.length + ' 个文件名）' : '复制失败，请手动选择', 'ok');
+  });
+}
+/* 结论文案（跟主进程 modalign-core 的 diffSummary 同一口径） */
+function MA_SUMMARY() {
+  const d = MA_STATE.result;
+  if (!d || !d.ok) return '';
+  const p = [];
+  if (d.missing.length) p.push('少 ' + d.missing.length + ' 个');
+  if (d.extra.length) p.push('多 ' + d.extra.length + ' 个');
+  if (d.differ.length) p.push('版本不同 ' + d.differ.length + ' 个');
+  return p.length ? p.join(' · ') : '完全一致（' + d.same + ' 个模组）';
+}
+
+function buildModalignCard() {
+  const card = el('div', 'card set-card mp-plg-card');
+  card.innerHTML =
+    '<h3><svg class="ic sm"><use href="#i-sync"/></svg> 模组清单对齐' +
+      '<span class="plg-tag" style="margin-left:8px">内置插件</span></h3>' +
+    '<p class="hint">两边模组不一致是联机崩溃 / 进不去的第一大原因。生成自己的清单发给对方，或把对方的清单粘进来 —— 缺哪个、版本差哪个，一眼看清。</p>' +
+    '<div class="dl-res-head">' +
+      '<label class="field"><span>用哪个实例的模组清单</span><select id="maInst">' + maInstanceOptionsHtml() + '</select></label>' +
+      '<div class="btn-row">' +
+        '<button class="btn primary" id="maMineBtn"><svg class="ic sm"><use href="#i-list"/></svg> 生成我的清单</button>' +
+        '<button class="btn ghost" id="maCopyBtn" disabled><svg class="ic sm"><use href="#i-box"/></svg> 复制</button>' +
+        '<button class="btn ghost" id="maSendBtn" disabled><svg class="ic sm"><use href="#i-user-check"/></svg> 发给好友</button>' +
+      '</div>' +
+    '</div>' +
+    /* 好友选择放在卡片里，不弹输入框：输入框在渲染层不存在，而且「几号是谁」靠记序号很容易错 */
+    '<div class="ma-send" id="maSendBox" style="display:none">' +
+      '<select id="maPeerSel"></select>' +
+      '<button class="btn primary" id="maSendGo">发送</button>' +
+    '</div>' +
+    '<div class="res-note" id="maMineNote" style="display:none"></div>' +
+    '<div class="ma-cols">' +
+      '<div class="ma-col"><b>对方的清单</b>' +
+        '<p class="hint">对方在联机页点「发给好友」你会自动收到；也可以让他把清单文本发给你，粘在下面。</p>' +
+        '<textarea id="maPaste" rows="6" placeholder="XLC-MODS/1&#10;ab12cd34ef56 123456 sodium-fabric-0.6.9.jar&#10;…" spellcheck="false"></textarea>' +
+        '<div class="btn-row"><button class="btn" id="maDiffBtn"><svg class="ic sm"><use href="#i-sync"/></svg> 比对</button>' +
+        '<button class="btn ghost" id="maClearBtn">清空</button></div>' +
+      '</div>' +
+      '<div class="ma-col"><b>比对结果</b><div id="maResult" class="ma-result"></div></div>' +
+    '</div>';
+  return card;
+}
+
+function renderModalignCard() {
+  const host = document.querySelector('#mpPluginHost');
+  if (!host) return;
+  host.innerHTML = '';
+  const card = buildModalignCard();
+  host.appendChild(card);
+  const instSel = $('#maInst');
+  const def = maDefaultInst();
+  if (instSel && def) { try { instSel.value = def; } catch (_) {} }
+  const note = $('#maMineNote');
+
+  const refreshButtons = () => {
+    const has = !!MA_STATE.mine;
+    $('#maCopyBtn').disabled = !has;
+    $('#maSendBtn').disabled = !has;
+  };
+  refreshButtons();
+
+  $('#maMineBtn').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true; b.textContent = '扫描中…';
+    const inst = $('#maInst').value;
+    const r = await window.lmc.modsManifest({ instance: inst });
+    b.disabled = false; b.innerHTML = '<svg class="ic sm"><use href="#i-list"/></svg> 生成我的清单';
+    if (!r || !r.ok) { toast('读取模组失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
+    MA_STATE.mine = r.text; MA_STATE.count = r.count; MA_STATE.instance = inst;
+    note.style.display = '';
+    note.innerHTML = '我的清单：<b>' + r.count + '</b> 个模组（' + esc(inst || '全局 mods') + '）· 约 ' + r.text.length + ' 字节，可以直接发给朋友';
+    refreshButtons();
+  });
+  $('#maCopyBtn').addEventListener('click', async () => {
+    if (!MA_STATE.mine) return;
+    toast((await copyToClipboard(MA_STATE.mine)) ? '清单已复制，发给朋友吧' : '复制失败', 'ok');
+  });
+  $('#maSendBtn').addEventListener('click', async () => {
+    if (!MA_STATE.mine) return;
+    const box = $('#maSendBox');
+    const sel = $('#maPeerSel');
+    const fr = await window.lmc.friendsGet();
+    const friends = (fr && fr.friends) || [];
+    if (!friends.length) { toast('还没有好友 —— 先到「好友」页用好友码加一个', 'warn'); return; }
+    const pr = await window.lmc.friendsPresence().catch(() => null);
+    const st = (pr && pr.ok && pr.status) || {};
+    /* 在线的排前面：发清单必然要求对方开着启动器，离线的那几个排后面一眼能跳过 */
+    const sorted = friends.slice().sort((a, b) => (!!(st[b.code] || {}).online) - (!!(st[a.code] || {}).online));
+    sel.innerHTML = sorted.map(f =>
+      '<option value="' + esc(f.code) + '">' + esc(f.name || f.code) +
+      ((st[f.code] || {}).online ? '（在线）' : '（离线）') + '</option>').join('');
+    box.style.display = '';
+    sel.focus();
+  });
+  $('#maSendGo').addEventListener('click', async (ev) => {
+    if (!MA_STATE.mine) return;
+    const to = $('#maPeerSel').value;
+    if (!to) return;
+    const b = ev.currentTarget;
+    b.disabled = true; b.textContent = '发送中…';
+    const r = await window.lmc.friendsSignalSend({ to, payload: { type: 'modlist', text: MA_STATE.mine } });
+    b.disabled = false; b.textContent = '发送';
+    if (!r || !r.ok) { toast('发送失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
+    const nm = ($('#maPeerSel').selectedOptions[0] || {}).textContent || to;
+    $('#maSendBox').style.display = 'none';
+    toast('清单已发给 ' + nm + '（对方在联机页会自动看到）');
+  });
+  $('#maDiffBtn').addEventListener('click', async () => {
+    const theirs = $('#maPaste').value.trim();
+    if (!theirs) { toast('先把对方的清单粘进来', 'warn'); return; }
+    if (!MA_STATE.mine) {
+      /* 没有自己的清单就现场扫一份，别让用户先去点「生成」 */
+      const inst = $('#maInst').value;
+      const r = await window.lmc.modsManifest({ instance: inst });
+      if (!r || !r.ok) { toast('读取模组失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
+      MA_STATE.mine = r.text; MA_STATE.count = r.count; MA_STATE.instance = inst;
+      refreshButtons();
+    }
+    const d = await window.lmc.modsDiff({ mine: MA_STATE.mine, theirs });
+    MA_STATE.result = d;
+    maRenderResult($('#maResult'));
+    if (d && d.ok) toast('比对完成：' + MA_SUMMARY(), 'ok');
+  });
+  $('#maClearBtn').addEventListener('click', () => {
+    $('#maPaste').value = '';
+    MA_STATE.result = null;
+    maRenderResult($('#maResult'));
+  });
+
+  /* 好友发来的清单（主进程收件箱）：有就直接列出来，点一下填进粘贴框 */
+  window.lmc.modlistInbox().then(r => {
+    const items = (r && r.items) || [];
+    if (!items.length) return;
+    const top = items[0];
+    const p = MA_STATE.count;
+    note.style.display = '';
+    note.innerHTML = '收到 <b>' + esc(top.name || top.from || '好友') + '</b> 发来的模组清单 · ' +
+      '<button class="link-btn" id="maUseInbox">用这份比对</button>' +
+      (p ? '' : '（你还没生成自己的清单，点「生成我的清单」后就能比）');
+    const use = $('#maUseInbox');
+    if (use) use.addEventListener('click', () => {
+      $('#maPaste').value = top.text;
+      toast('已填入对方的清单，点「比对」看差异');
+    });
+  }).catch(() => {});
+}
+
+function renderMpPluginHost() {
+  const host = document.querySelector('#mpPluginHost');
+  if (!host) return;
+  host.innerHTML = '';
+  runUiHooks('mpPage', { host });
+}
+uiHook('mpPage', 'modalign', () => { renderModalignCard(); });
+
+/* 好友发来的清单到了（主进程在 friends:signal-poll 里推进收件箱并推这条事件）：
+   人在联机页就顺手把卡片刷一遍，让「用这份比对」直接出现；不在联机页只弹个提示。 */
+window.lmc.on('modlist:received', (d) => {
+  const who = (d && (d.name || d.from)) || '好友';
+  toast(who + ' 发来一份模组清单 —— 到联机页点「用这份比对」');
+  const host = document.querySelector('#mpPluginHost');
+  if (host && host.querySelector('.mp-plg-card') && !MA_STATE.result) renderModalignCard();
+});
+
+/* 模组清单对齐的插件面板：说明 + 默认实例 + 去联机页
+   插件面板里选的实例只影响本机的比对默认值（存在内存里，不写 defaultVersion ——
+   那是「启动哪个版本」，跟「比哪份模组」不是一回事，别顺手把人家的启动版本改了）。 */
+async function initModalignPane() {
+  const pane = document.querySelector('#plgModalign');
+  if (!pane) return;
+  if (!pane.dataset.wired) {
+    pane.dataset.wired = '1';
+    $('#btnMaBack').addEventListener('click', closePlugin);
+    $('#maGoMp').addEventListener('click', () => gotoPage('mp'));
+    $('#maGoFriend').addEventListener('click', () => gotoPage('friends'));
+    $('#maDefaultInst').addEventListener('change', (ev) => {
+      MA_STATE.preferInst = ev.currentTarget.value || '';
+      toast('比对默认实例已切到 ' + (MA_STATE.preferInst || '全局 mods'));
+    });
+  }
+  const sel = $('#maDefaultInst');
+  const cur = MA_STATE.preferInst || maDefaultInst();
+  sel.innerHTML = maInstanceOptionsHtml();
+  if (cur) { try { sel.value = cur; } catch (_) {} }
+}
+
 
 /* ================================================================
  * 内置插件：模组翻译器

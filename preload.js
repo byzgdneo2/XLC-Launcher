@@ -13,6 +13,18 @@ contextBridge.exposeInMainWorld('lmc', {
   savesList: () => ipcRenderer.invoke('saves:list'),
   savesPreview: (p) => ipcRenderer.invoke('saves:preview', p),
   savesDelete: (p) => ipcRenderer.invoke('saves:delete', p),
+  /* 内置插件「存档备份」：备份 / 列表 / 恢复 / 打开备份目录 / 全部备份 */
+  savesBackup: (p) => ipcRenderer.invoke('saves:backup', p),
+  savesBackups: () => ipcRenderer.invoke('saves:backups'),
+  savesRestore: (p) => ipcRenderer.invoke('saves:restore', p),
+  savesBackupReveal: () => ipcRenderer.invoke('saves:backup-dir'),
+  savesBackupAll: () => ipcRenderer.invoke('saves:backup-all'),
+  savesBackupDelete: (p) => ipcRenderer.invoke('saves:backup-delete', p),
+  /* 内置插件「模组清单对齐」：扫本地清单 / 算差异 / 收件箱（好友通道发来的清单） */
+  modsManifest: (p) => ipcRenderer.invoke('mods:manifest', p),
+  modsDiff: (p) => ipcRenderer.invoke('mods:diff', p),
+  modlistInbox: () => ipcRenderer.invoke('modlist:inbox'),
+  modlistClear: () => ipcRenderer.invoke('modlist:clear'),
   getManifest: () => ipcRenderer.invoke('manifest:get'),
   /* force=true 表示本次调用要求「实时查询」：主进程侧无任何兼容性缓存，每次都会真实访问上游 */
   loaderProbe: (kind, gameVer, force) => ipcRenderer.invoke('loader:probe', kind, gameVer, !!force),
@@ -49,6 +61,10 @@ contextBridge.exposeInMainWorld('lmc', {
   modrinthInstallMod: (p) => ipcRenderer.invoke('modrinth:install-mod', p),
   modrinthInstallModpack: (p) => ipcRenderer.invoke('modrinth:install-modpack', p),
   modrinthInstallPack: (p) => ipcRenderer.invoke('modrinth:install-pack', p),
+  /* 内容下载（MOD/整合包/资源包/光影/数据包）的「停止」：凭渲染层生成的 jobKey 打断任务 */
+  downloadCancel: (jobKey) => ipcRenderer.invoke('download:cancel', jobKey),
+  /* 冒烟专用：主进程只在 LMC_SMOKE_DL=1 时注册，平时调会报无处理器 */
+  smokeDownload: (p) => ipcRenderer.invoke('smoke:download', p),
   pickBg: () => ipcRenderer.invoke('personalize:pick-bg'),
   getBg: () => ipcRenderer.invoke('personalize:get-bg'),
   sysMem: (p) => ipcRenderer.invoke('sys:meminfo', p),
@@ -80,6 +96,8 @@ contextBridge.exposeInMainWorld('lmc', {
   diagReports: (p) => ipcRenderer.invoke('diag:reports', p),
   diagGame: (p) => ipcRenderer.invoke('diag:game', p),
   diagAi: (p) => ipcRenderer.invoke('diag:ai', p),
+  /* 反馈页：仓库 Issue 按处理状态分组（force=true 表示忽略 10 分钟缓存，强制重取） */
+  feedbackList: (p) => ipcRenderer.invoke('feedback:list', p),
   accountList: () => ipcRenderer.invoke('account:list'),
   accountAdd: (p) => ipcRenderer.invoke('account:add', p),
   accountSwitch: (p) => ipcRenderer.invoke('account:switch', p),
@@ -164,7 +182,9 @@ contextBridge.exposeInMainWorld('lmc', {
       'launch:log', 'launch:exit', 'launch:stage', 'mp:progress', 'win:maximized',
       'server:log', 'server:progress', 'server:state',
       'update:progress', 'update:available', 'account:ms-progress', 'plugin:cfg-changed',
-      'translator:progress', 'translator:drop'
+      'translator:progress', 'translator:drop',
+      /* 内置插件「存档备份 / 模组清单对齐」的推送（自动备份完成 / 收到好友清单） */
+      'backup:auto-done', 'modlist:received'
     ];
     if (!ON_CHANNELS.includes(channel)) throw new Error('不允许订阅 IPC 通道: ' + channel);
     if (typeof cb !== 'function') throw new Error('on() 需要一个回调函数');

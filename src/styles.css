@@ -134,6 +134,10 @@ body.light-bg #bootMask .boot-bar{ background:rgba(0,0,0,.1); }
 .btn.ghost{ background:transparent; }
 .btn:disabled{ opacity:.45; cursor:not-allowed; filter:none; }
 .btn.danger{ background:rgba(248,113,113,.15); color:var(--danger); border-color:rgba(248,113,113,.3); }
+/* 下载中的「停止」：安装按钮临时换成这一副面孔 —— 描边红、无渐变，
+   一眼看出此刻点它不是"再装一次"而是"打断下载" */
+.btn.stop{ background:rgba(248,113,113,.14); color:var(--danger); border:1px solid rgba(248,113,113,.45); box-shadow:none; }
+.btn.stop:hover{ background:rgba(248,113,113,.22); box-shadow:none; }
 /* MOD 行的「更新」按钮（PCL 的 BtnUpdate 同位）：绿色描边，有新版才出现 */
 .btn.upd{ background:rgba(52,211,153,.12); color:#34d399; border-color:rgba(52,211,153,.4); }
 
@@ -1400,3 +1404,87 @@ body.turbo *{ text-shadow:none !important; backdrop-filter:none !important; filt
 .res-pack.res-pack-sel{ box-shadow:inset 0 0 0 1.5px var(--acc-border); background:rgba(52,211,153,.07); }
 .res-pack.res-pack-err .mod-file{ color:var(--warn); }
 .res-batchbar{ position:sticky; bottom:8px; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px; padding:10px 14px; border:1px solid var(--line2); border-radius:var(--r-md); background:var(--card); box-shadow:0 6px 20px rgba(0,0,0,.35); font-size:13px; }
+
+/* ===== 内置插件：存档备份 ===== */
+/* 备份列表：一行一份，左侧「存档名 + 时间/体积」，右侧三个动作按钮。
+   行高固定，列表长了也不会跳；用 --line2 描边跟其它卡片区分开，不加底色。 */
+.bk-list{ display:flex; flex-direction:column; gap:8px; }
+.bk-row{ display:flex; align-items:center; gap:12px; padding:9px 12px; border:1px solid var(--line2); border-radius:var(--r-md); }
+.bk-main{ display:flex; flex-direction:column; gap:3px; min-width:0; flex:1; }
+.bk-main b{ font-size:13.5px; font-weight:650; color:var(--tx); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bk-sub{ font-size:11.5px; color:var(--tx3); }
+.bk-acts{ display:flex; gap:6px; flex:none; }
+.bk-acts .btn{ padding:4px 10px; font-size:12px; }
+.bk-acts .danger-ghost{ color:var(--warn); }
+
+/* ===== 内置插件：模组清单对齐（联机页注入的卡片 + 插件面板） ===== */
+/* 卡片进的是联机页，跟那边的 .set-card 对齐；顶部不额外加 margin，交给 #mpPluginHost */
+.mp-plg-card{ margin-top:16px; }
+.ma-send{ display:flex; gap:8px; align-items:center; margin:0 0 10px; padding:10px 12px; border:1px solid var(--line2); border-radius:var(--r-md); background:rgba(128,128,128,.05); }
+.ma-send select{ flex:1; min-width:0; }
+.ma-cols{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:12px; }
+@media (max-width:900px){ .ma-cols{ grid-template-columns:1fr; } }
+.ma-col{ min-width:0; }
+.ma-col > b{ display:block; font-size:13px; margin-bottom:6px; color:var(--tx); }
+.ma-col textarea{ width:100%; font-family:ui-monospace,Consolas,monospace; font-size:11.5px; line-height:1.5; resize:vertical; }
+.ma-result{ min-height:60px; }
+.ma-sum{ font-size:12.5px; font-weight:650; color:var(--acc2); margin-bottom:8px; }
+.ma-block{ margin-bottom:10px; }
+.ma-block > b{ display:block; font-size:12px; color:var(--tx2); margin-bottom:5px; }
+.ma-item{ display:flex; align-items:center; gap:10px; padding:4px 8px; border-radius:7px; font-size:12px; }
+.ma-item:nth-child(odd){ background:rgba(128,128,128,.06); }
+.ma-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--tx2); }
+.ma-size{ flex:none; font-size:11px; color:var(--tx3); }
+/* 插件面板里的三步说明 */
+.ma-steps{ display:flex; flex-direction:column; gap:8px; margin:10px 0 12px; }
+.ma-steps > div{ display:flex; align-items:flex-start; gap:10px; font-size:12.5px; color:var(--tx2); }
+.ma-steps b{ flex:none; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; background:rgba(168,85,247,.16); color:#a855f7; }
+/* 文字按钮（收件箱提示里的「用这份比对」） */
+.link-btn{ background:none; border:0; padding:0 2px; color:var(--acc2); font-size:12px; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+.link-btn:hover{ filter:brightness(1.15); }
+
+/* ===== 反馈页（照 PCL CE：顶部说明 + 前往反馈 + 六档折叠列表） ===== */
+.fb-note{ font-size:12.5px; color:var(--tx2); line-height:1.8; }
+.fb-note p{ margin:0; }
+.fb-note b{ color:var(--tx); }
+.fb-note .fb-tip{ margin-top:6px; color:var(--tx3); }
+.fb-acts{ display:flex; gap:10px; margin-top:15px; flex-wrap:wrap; }
+.fb-groups{ margin-top:14px; display:flex; flex-direction:column; gap:9px; }
+.fb-group{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--r-md);
+  overflow:hidden; transition:border-color .15s;
+}
+.fb-group:hover{ border-color:var(--line2); }
+.fb-group summary{
+  list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px;
+  padding:14px 18px; font-size:13.5px; font-weight:600; color:var(--tx); transition:background .15s;
+}
+.fb-group summary::-webkit-details-marker{ display:none; }
+.fb-group summary:hover{ background:var(--card2); }
+.fb-gname{ flex:none; }
+.fb-gcount{
+  font-size:11px; font-weight:600; color:var(--acc2); background:var(--acc-soft2);
+  border:1px solid var(--acc-border); border-radius:99px; padding:1px 8px; min-width:22px; text-align:center;
+}
+.fb-gcount.zero{ color:var(--tx3); background:transparent; border-color:var(--line2); }
+.fb-chev{ margin-left:auto; width:16px; height:16px; color:var(--tx3); transition:transform .22s cubic-bezier(.34,1.3,.45,1); }
+.fb-group[open] .fb-chev{ transform:rotate(180deg); }
+.fb-list{ border-top:1px solid var(--line); }
+.fb-item{
+  display:flex; align-items:center; gap:10px; padding:10px 18px; cursor:pointer;
+  border-bottom:1px solid var(--line); transition:background .13s;
+}
+.fb-item:last-child{ border-bottom:none; }
+.fb-item:hover{ background:var(--card2); }
+.fb-num{ flex:none; font-family:var(--mono); font-size:11.5px; color:var(--tx3); }
+.fb-title{ flex:1; min-width:0; font-size:12.5px; color:var(--tx); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fb-item:hover .fb-title{ color:var(--acc2); }
+.fb-tags{ flex:none; display:flex; gap:5px; }
+.fb-tag{ font-style:normal; font-size:10.5px; color:var(--tx2); border:1px solid var(--line2); border-radius:99px; padding:1px 7px; white-space:nowrap; }
+.fb-time{ flex:none; font-size:11px; color:var(--tx3); min-width:62px; text-align:right; }
+.fb-empty{ padding:15px 18px; color:var(--tx3); font-size:12px; }
+/* 拉取失败：不装死，直接把原因摊开，并提示仍然可以走网页 */
+.fb-fail{
+  background:rgba(251,191,36,.07); border:1px solid rgba(251,191,36,.25); color:#fcd34d;
+  border-radius:var(--r-md); padding:14px 16px; font-size:12.5px; line-height:1.75;
+}
