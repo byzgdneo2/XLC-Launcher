@@ -6,25 +6,32 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 - **实例管理**：多实例共存、版本隔离、实例独立设置（内存 / Java / 启动参数等）
 - **模组加载器**：Forge / NeoForge / Fabric / Quilt / OptiFine 一键安装与版本切换，镜像加速，境内网络友好
-- **MOD 管理**：扫描与分类、错误 / 重复检测、一键检查更新（Modrinth / CurseForge）
+- **MOD 管理**：扫描与分类、错误 / 重复检测、一键检查更新（Modrinth / CurseForge）；没选目标版本时弹系统「选择保存位置」，不替你猜实例
+- **下载可停止**：MOD / 整合包 / 资源包 / 光影包 / 数据包下载途中点一下就能断，不留半截临时文件
 - **资源包 / 光影包**：自动扫描、更新检测、从文件安装、信息导出
+- **存档保护**：内置「存档备份」插件 —— 手动备份、启动前 / 退出后自动备份（只备变过的）、按存档保留 N 份、一键恢复（恢复前自动兜底一份）
+- **联机对表**：内置「模组清单对齐」插件 —— 只交换文件名、体积与前 4MB 哈希，差异分「对方有我缺 / 我有对方缺 / 版本不同」三组，不上传模组内容
 - **账户**：离线登录、微软登录、第三方外置登录（Yggdrasil）
 - **智能内存分配**：按模组数量与可用内存自动计算推荐值
 - **内置插件**：插件面板（独立窗口）、模组翻译器（自动生成汉化资源包）、手柄控制
 - **联机 / 开服**：一键联机与本地服务端管理
-- **启动器更新**：检测新版本、支持版本回退
+- **反馈**：侧边栏「反馈」页直接看 Issue 的分档进度，不用先跳到浏览器
+- **启动器更新**：检测新版本（GitHub 优先、官网兜底）、支持版本回退
 
 > 下载游戏与整合包在线安装暂未开放，后续版本会回归。
 
 ## 下载
 
-前往 [**最新发行版**](https://github.com/byzgdneo2/XLC-Launcher/releases/latest) 下载：
+前往 [**Releases**](https://github.com/byzgdneo2/XLC-Launcher/releases) 下载：
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 1.2-rc4 | `XLC-Launcher-1.2-rc4-portable.exe` | 便携版，双击即用；配置与游戏数据存在 exe 旁，不写注册表 |
+| 1.2 | `XLC-Launcher-1.2-portable.exe` | 正式版，建议日常使用 |
+| 1.3-snapshot1 | `XLC-Launcher-1.3-snapshot1-portable.exe` | 快照版，含存档备份、模组清单对齐、下载可停止等新功能，可能不稳定 |
 
-每个发行版都附了 MD5 / SHA256 校验值，历史版本在 [Releases](https://github.com/byzgdneo2/XLC-Launcher/releases) 里都能找到。
+都是免安装便携版，双击即用；配置与游戏数据存在 exe 旁边的 `XLC数据`，不写注册表、不装系统服务。
+
+每个发行版都附了 MD5 校验值（正式版另附 SHA256），历史版本在 [Releases](https://github.com/byzgdneo2/XLC-Launcher/releases) 里都能找到。
 
 ## 反馈
 
