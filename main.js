@@ -141,6 +141,7 @@ try {
    → **1.2-snapshot2（1.2 第二个快照：可见性默认改「保持显示」+ 老配置迁移、快照版专用 UI 回归、账户设置、存档预览实时检测、插件读写设置 control、极速模式）**
    → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**→ 1.2-rc4（游戏诊断 v2：崩溃报告可选可析、规则 25 条、不限日志新旧）→ **1.2（正式版：诊断 v2 / 反馈入口转正 + 更新源 GitHub 优先、官网兜底）**
    → **1.3-snapshot1（1.3 首个快照：内置插件「存档备份」+「模组清单对齐」，插件首次能往宿主页面注入界面）**
+   → 1.3-snapshot2（审计 F1~F8：配置原子写 + 坏文件备份、退出时等在跑的自动备份、启动提示按登录方式、启动前命令防注入、开服模组同步判定、删除 MOD 进回收站、反馈页翻页、清单截断提示）
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -149,7 +150,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.3-snapshot1';
+const APP_VERSION = '1.3-snapshot2';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -541,7 +542,10 @@ ipcMain.handle('mods:delete', async (_e, p) => {
   try {
     const f = safeModsPath(p.name, p.instance);
     if (!f || !fs.existsSync(f)) throw new Error('文件不存在');
-    await fsp.rm(f, { force: true });
+    /* 和存档 / 实例删除保持一致：先扔回收站（误删能捞回来），回收站不可用再退化为直接删除。
+       原来这里是 fsp.rm —— 手动改过的 jar 误删就找不回来了（审计 F6）。 */
+    try { await shell.trashItem(f); }
+    catch (_) { await fsp.rm(f, { force: true }); }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -1118,12 +1122,53 @@ ipcMain.handle('shell:open-external', (_e, url) => {
   toast('链接打开失败: ' + msg, 'warn');
   return { ok: false, error: msg };
 });
+/* 配置损坏时的说明：loadConfig 发生在 logLine / toast 就绪之前（LOG_DIR 在下方声明，
+   提前调用会踩 TDZ），所以先把原因存起来，等主窗口加载完成再写日志 + 弹提示。 */
+let CONFIG_LOAD_WARN = '';
 function loadConfig() {
-  try { return Object.assign({}, DEFAULT_CONFIG, JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))); }
-  catch (_) { return Object.assign({}, DEFAULT_CONFIG); }
+  let raw = null;
+  try { raw = fs.readFileSync(CONFIG_PATH, 'utf8'); }
+  catch (_) { return Object.assign({}, DEFAULT_CONFIG); }   /* 没有文件 = 首次运行，属正常 */
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('配置根节点不是对象');
+    return Object.assign({}, DEFAULT_CONFIG, obj);
+  } catch (e) {
+    /* 配置坏了：**先改名保留**再用默认值启动 —— 绝不直接覆盖，否则原始内容永久丢失。
+       之前的行为是静默返回默认配置，用户只会看到「所有设置变回默认」。 */
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    const bad = CONFIG_PATH + '.bad-' + stamp;
+    let kept = '';
+    try { fs.renameSync(CONFIG_PATH, bad); kept = bad; }
+    catch (_) {
+      try { fs.copyFileSync(CONFIG_PATH, bad); kept = bad; } catch (_) {}
+    }
+    CONFIG_LOAD_WARN = '配置文件解析失败（' + e.message + '）' +
+      (kept ? '，原文件已备份为 ' + path.basename(kept) : '') + '，本次先用默认配置启动';
+    try { console.error('[config] ' + CONFIG_LOAD_WARN); } catch (_) {}
+    return Object.assign({}, DEFAULT_CONFIG);
+  }
 }
+/* 原子写：写 .xlc-tmp → fsync → rename 覆盖。直接 writeFileSync 目标文件时，
+   写一半断电/进程被杀/磁盘满会留下半截 JSON（下一次启动就成了 F1 里那种「设置全丢」）。
+   失败不再静默：写日志 + 弹提示，让用户知道「这次设置没保存成功」。 */
 function saveConfigNow() {
-  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2)); } catch (_) {}
+  const tmp = CONFIG_PATH + '.xlc-tmp';
+  try {
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, JSON.stringify(config, null, 2));
+      try { fs.fsyncSync(fd); } catch (_) {}   /* 尽量把内容刷到盘上再改名 */
+    } finally { try { fs.closeSync(fd); } catch (_) {} }
+    fs.renameSync(tmp, CONFIG_PATH);
+    return true;
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    try { logLine('[config] 保存失败: ' + e.message); } catch (_) {}
+    try { toast('设置保存失败：' + e.message + '（请检查磁盘空间与文件权限）', 'error'); } catch (_) {}
+    return false;
+  }
 }
 let config = loadConfig();
 /* 存档备份设置规整：老配置里没有 backup 字段、或者被外部改脏了，都在这里落回合法值 */
@@ -1134,8 +1179,7 @@ config.backup = SB_CORE.normalizeBackupCfg(config.backup);
  * 这里故意不调 logLine —— LOG_DIR 在下方才声明，提前调用会踩 TDZ。 */
 try {
   if (!fs.existsSync(CONFIG_PATH)) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-    console.log('[首次运行] 已创建默认配置: ' + CONFIG_PATH);
+    if (saveConfigNow()) console.log('[首次运行] 已创建默认配置: ' + CONFIG_PATH);
   }
 } catch (_) {}
 
@@ -4829,6 +4873,12 @@ function offlineUUID(name) {
   return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
 }
 function subVars(s, values) { return String(s).replace(/\$\{(\w+)\}/g, (m, k) => (values[k] !== undefined ? values[k] : m)); }
+/* 启动前命令是用户自己填的 shell 字符串，但 ${gameDir} / ${version} 的取值来自游戏路径与实例名 ——
+   实例名在「导入整合包 / 手动建目录」时可以含 & | < > ^ % 和引号，原样替换进 shell:true 的命令行
+   就会被 cmd 当成命令分隔符 / 变量展开（审计 F4）。含这些字符时不替换、整条命令跳过并明确提示：
+   宁可少跑一次可选脚本，也不把外部可控字符串拼进 shell。 */
+const SHELL_UNSAFE_VALUE_RE = /["%&|<>^\r\n]/;
+function cmdVarUnsafe(v) { return SHELL_UNSAFE_VALUE_RE.test(String(v == null ? '' : v)); }
 /* 启动前确保游戏语言为简体中文：options.txt 的 lang 行缺失或为英文缺省(en_us)时写入 zh_cn；
    用户在游戏里主动选择过的其他语言保持不动 */
 function ensureChineseLang(gd) {
@@ -4954,6 +5004,13 @@ function restoreLauncherWindow(deps) {
    GAME_STOP_BY_USER：用户自己按的关闭 —— 退出时不报「异常退出」、不跑崩溃诊断 */
 let GAME_PROC = null;
 let GAME_STOP_BY_USER = false;
+/* 本次启动实际用的登录方式：ms（微软正版）/ authlib（外置登录）/ offline（离线）。
+   启动成功的提示按它给文案 —— 原来不管什么账户都弹「离线模式」，
+   正版玩家会以为自己掉线了（审计 F3）。 */
+let LAST_LAUNCH_MODE = 'offline';
+function launchModeLabel() {
+  return LAST_LAUNCH_MODE === 'ms' ? '微软正版登录' : LAST_LAUNCH_MODE === 'authlib' ? '外置登录' : '离线模式';
+}
 /* 干跑（只为测「启动准备」耗时，不真拉游戏进程）：`LMC_SMOKE_LAUNCH` 自测用，见文件末尾冒烟块。
    走完整条准备链路（版本链 / 账户 / Java / 内存 / classpath / natives / 启动参数），
    到 spawn 之前停下并打印分段耗时 —— 这样优化启动速度能有可复现的对照数字。 */
@@ -4965,7 +5022,7 @@ ipcMain.handle('launch:start', (_e, opts) => {
   }
   LAUNCHING = true;
   runLaunch(opts)
-    .then(() => toast('游戏进程已启动（离线模式）'))
+    .then((r) => { if (!(r && r.dryRun)) toast('游戏进程已启动（' + launchModeLabel() + '）'); })
     .catch(err => {
       LAUNCHING = false;
       restoreLauncherWindow();   /* 启动流程中途失败也要确保窗口没被藏起来 */
@@ -4995,6 +5052,7 @@ async function runLaunch(opts) {
   /* 账户凭据解析：微软/外置账户使用真实 UUID + 令牌（过期自动续期），离线账户用离线 UUID */
   let launchAcc = null, authUuid = '', authToken = '0', userType = 'legacy';
   launchAcc = await resolveLaunchAccount(logLine);
+  LAST_LAUNCH_MODE = launchAcc ? (launchAcc.type === 'ms' ? 'ms' : 'authlib') : 'offline';
   if (launchAcc) {
     authUuid = launchAcc.uuid;
     authToken = launchAcc.mcToken || launchAcc.accessToken || '0';
@@ -5260,23 +5318,34 @@ async function runLaunch(opts) {
      同步执行、等它跑完再启动游戏 —— 典型用途是「启动前把某处配置同步进实例」。
      失败不阻断启动（只记日志），免得一个可有可无的脚本把游戏卡在门外。 */
   if (config.preLaunchCmd) {
-    const cmdStr = subVars(String(config.preLaunchCmd).trim(), { gameDir: launchDir, version: versionId });
-    if (cmdStr) {
-      send('launch:log', '[XLC] 执行启动前命令: ' + cmdStr);
-      try {
-        await new Promise((resolve) => {
-          const sh = spawn(cmdStr, { cwd: launchDir, shell: true });
-          let ob = '';
-          sh.stdout.on('data', d => { ob += d.toString(); });
-          sh.stderr.on('data', d => { ob += d.toString(); });
-          sh.on('error', (e) => { send('launch:log', '[XLC] 启动前命令执行失败: ' + e.message); resolve(); });
-          sh.on('exit', (c) => {
-            if (ob.trim()) send('launch:log', ob.trim().split(/\r?\n/).slice(0, 20).join('\n'));
-            if (c !== 0) send('launch:log', '[XLC] 启动前命令退出码 ' + c + '（不阻断启动）');
-            resolve();
+    const vars = { gameDir: launchDir, version: versionId };
+    const unsafe = Object.keys(vars).filter(k => cmdVarUnsafe(vars[k]));
+    if (unsafe.length) {
+      /* 不阻断启动：只跳过这条可选脚本，并把原因同时写日志 + 告诉用户 */
+      const msg = '实例名或游戏路径含 shell 特殊字符（' + unsafe.map(k => '${' + k + '}').join(' / ') +
+        '），已跳过「启动前命令」以免被当成命令分隔符';
+      logLine('[launch] ' + msg);
+      send('launch:log', '[XLC] ' + msg);
+      toast(msg, 'warn');
+    } else {
+      const cmdStr = subVars(String(config.preLaunchCmd).trim(), vars);
+      if (cmdStr) {
+        send('launch:log', '[XLC] 执行启动前命令: ' + cmdStr);
+        try {
+          await new Promise((resolve) => {
+            const sh = spawn(cmdStr, { cwd: launchDir, shell: true });
+            let ob = '';
+            sh.stdout.on('data', d => { ob += d.toString(); });
+            sh.stderr.on('data', d => { ob += d.toString(); });
+            sh.on('error', (e) => { send('launch:log', '[XLC] 启动前命令执行失败: ' + e.message); resolve(); });
+            sh.on('exit', (c) => {
+              if (ob.trim()) send('launch:log', ob.trim().split(/\r?\n/).slice(0, 20).join('\n'));
+              if (c !== 0) send('launch:log', '[XLC] 启动前命令退出码 ' + c + '（不阻断启动）');
+              resolve();
+            });
           });
-        });
-      } catch (e) { send('launch:log', '[XLC] 启动前命令异常: ' + e.message + '（不阻断启动）'); }
+        } catch (e) { send('launch:log', '[XLC] 启动前命令异常: ' + e.message + '（不阻断启动）'); }
+      }
     }
   }
 
@@ -5355,8 +5424,9 @@ async function runLaunch(opts) {
        顺带清掉可能还挂着的隐藏定时器（进程秒退时它本会把窗口藏掉） */
     restoreLauncherWindow();
     /* 内置插件「存档备份」：游戏退出后再备一次（这次覆盖本次游玩全部进度）。
-       延迟 2.5 秒 —— 进程刚退时 region 文件可能还在 flush，太早打包会读到半截文件。 */
-    setTimeout(() => { autoBackupSaves('exit', 90000).catch(() => {}); }, 2500);
+       延迟 2.5 秒 —— 进程刚退时 region 文件可能还在 flush，太早打包会读到半截文件。
+       定时器登记在 EXIT_BAK_TIMER 里：玩家这时关启动器，before-quit 会接管并等它跑完。 */
+    scheduleExitBackup();
     send('launch:stage', { stage: 'idle', code, byUser });
     setStatus('就绪');
     /* 主动关闭属于正常收尾：taskkill 出来的退出码当然不是 0，但这不是崩溃 ——
@@ -6187,7 +6257,15 @@ function listSaveBackups() {
 }
 /* 自动备份：启动前 / 退出后各调一次。phase 决定要不要跑（用户在插件设置里能分别关掉） */
 let AUTO_BAK_BUSY = false;
-async function autoBackupSaves(phase, budgetMs) {
+/* 退出后自动备份的 2.5 秒延迟定时器 —— 玩家关掉游戏后立刻关启动器的话，
+   原来这个定时器会随进程一起消失，备份**根本不会开始**（审计 F2）。
+   现在 before-quit 会把它提前触发并等它跑完（最多 3 秒）。 */
+let EXIT_BAK_TIMER = null;
+/* 任一自动备份在跑的 Promise：退出时用它判断「要不要等」 */
+let BAK_INFLIGHT = null;
+/* 已经为本次退出等过一次，避免 before-quit 重入时反复拦截 */
+let QUIT_BAK_WAITED = false;
+async function autoBackupSavesInner(phase, budgetMs) {
   const cfg = SB_CORE.normalizeBackupCfg(config.backup);
   if (!cfg.auto) return { ok: true, skipped: 'auto-off' };
   if (phase === 'launch' ? !cfg.onLaunch : !cfg.onExit) return { ok: true, skipped: 'phase-off' };
@@ -6207,6 +6285,20 @@ async function autoBackupSaves(phase, budgetMs) {
     if (done.length) send('backup:auto-done', { phase, items: done.map(d => ({ name: d.name, at: d.at, bytes: d.bytes })) });
   } finally { AUTO_BAK_BUSY = false; }
   return { ok: true, done };
+}
+/* 包一层只为了拿到「在跑的 Promise」给 before-quit 用（不改动内部逻辑） */
+function autoBackupSaves(phase, budgetMs) {
+  const p = autoBackupSavesInner(phase, budgetMs);
+  BAK_INFLIGHT = p;
+  return p.finally(() => { if (BAK_INFLIGHT === p) BAK_INFLIGHT = null; });
+}
+/* 游戏退出后调用：2.5 秒后再开始备份（等 region 文件 flush），并登记定时器供退出时接管 */
+function scheduleExitBackup() {
+  if (EXIT_BAK_TIMER || BAK_INFLIGHT) return;
+  EXIT_BAK_TIMER = setTimeout(() => {
+    EXIT_BAK_TIMER = null;
+    autoBackupSaves('exit', 90000).catch(() => {});
+  }, 2500);
 }
 ipcMain.handle('saves:backup', async (_e, p) => {
   try {
@@ -6314,8 +6406,11 @@ ipcMain.handle('mods:manifest', async (_e, p) => {
       const sig = fileSig(abs);
       if (sig) list.push({ name: n, size: sig.size, sha1: sig.sha1 });
     }
-    const mods = MA_CORE.normalizeMods(list);
-    return { ok: true, instance, dir, count: mods.length, text: MA_CORE.buildManifest(list), mods };
+    const info = MA_CORE.normalizeModsInfo(list);
+    return {
+      ok: true, instance, dir, count: info.mods.length, total: info.total, truncated: info.truncated,
+      text: MA_CORE.buildManifest(list), mods: info.mods
+    };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('mods:diff', (_e, p) => {
@@ -8807,7 +8902,7 @@ ipcMain.handle('server:sync-mods', async (_e, p) => {
     const outDir = path.join(dir, 'mods');
     fs.mkdirSync(outDir, { recursive: true });
     const preview = !!o.preview;
-    const added = [], updated = [], clientOnly = [];
+    const added = [], updated = [], clientOnly = [], failed = [];
     let from = '';
     for (const s of dirs) {
       let files = [];
@@ -8819,15 +8914,23 @@ ipcMain.handle('server:sync-mods', async (_e, p) => {
         /* 纯客户端 mod（光影/优化/界面类）装了服务端也用不上，且 Fabric 会直接跳过，不必拷 */
         if (jarEnvOf(src) === 'client') { clientOnly.push(f); continue; }
         const dst = path.join(outDir, f);
+        let srcStat = null;
+        try { srcStat = fs.statSync(src); } catch (e) { failed.push(f + '（读取源文件失败）'); continue; }
         let need = true, isUpd = false;
         try {
-          const a = fs.statSync(src), b = fs.statSync(dst);
-          need = a.size !== b.size;
+          const b = fs.statSync(dst);
+          /* 只比体积会漏：同体积但内容不同（换了构建 / 被替换过）原来会被判成「已同步」（审计 F5）。
+             体积 + 毫秒级 mtime 足够区分实际改动，又不用给几百个 jar 逐个复算哈希。
+             拷完把目标 mtime 对齐源文件（下面 utimesSync），否则每次同步都会因为 mtime 不同而重拷。 */
+          need = srcStat.size !== b.size || Math.abs(srcStat.mtimeMs - b.mtimeMs) > 1;
           isUpd = true;
         } catch (_) { need = true; isUpd = false; }
         if (!need) continue;
         if (!preview) {
-          try { fs.copyFileSync(src, dst); } catch (_) { continue; }   /* 单个文件失败不影响其余 */
+          try {
+            fs.copyFileSync(src, dst);
+            try { fs.utimesSync(dst, srcStat.atime, srcStat.mtime); } catch (_) {}
+          } catch (e) { failed.push(f + '（' + e.message + '）'); continue; }
         }
         (isUpd ? updated : added).push(f);
       }
@@ -8835,8 +8938,10 @@ ipcMain.handle('server:sync-mods', async (_e, p) => {
     }
     if (!from) throw new Error('没找到客户端的 mods 目录（先在启动器里装好/启动一个实例）');
     logLine('[server] 同步 mod → ' + name + '：新增 ' + added.length + '、更新 ' + updated.length +
-      '、跳过纯客户端 ' + clientOnly.length + '（来源 ' + from + '）');
-    return { ok: true, from, dir: outDir, added, updated, clientOnly, preview };
+      '、跳过纯客户端 ' + clientOnly.length + '、失败 ' + failed.length + '（来源 ' + from + '）');
+    if (failed.length) logLine('[server] 同步失败的 mod: ' + failed.slice(0, 10).join(' / ') +
+      (failed.length > 10 ? ' …' : ''));
+    return { ok: true, from, dir: outDir, added, updated, clientOnly, failed, preview };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('server:list', () => {
@@ -9298,7 +9403,7 @@ ipcMain.handle('mp:stop', async () => {
   fs.rmSync(TC_PORT_FILE, { force: true });
   return { ok: true };
 });
-app.on('before-quit', () => {
+app.on('before-quit', (e) => {
   /* 退出打点：日志里看到这一行 = 走的是正常退出流程（关窗 / 更新替换）。
      看不到这一行、日志却停在某处 = 非正常死亡（原生崩溃 / 被外部杀掉），
      与「用户点了关闭」可以一眼区分开。 */
@@ -9306,6 +9411,23 @@ app.on('before-quit', () => {
   try {
     if (tcPort) { fetch('http://127.0.0.1:' + tcPort + '/panic?peaceful=true', { signal: AbortSignal.timeout(1500) }).catch(() => {}); tcPort = 0; }
   } catch (_) {}
+  /* 自动备份保护（审计 F2）：玩家关掉游戏后 2.5 秒内关启动器，或者备份正在写 zip 时关启动器，
+     原来的实现会让这次备份**静默消失**（定时器随进程死掉 / zip 留半截）。
+     这里先拦下退出：还在延迟里就立刻开始备份，已经在跑就等它，最多 3 秒。
+     超时放弃并写日志 —— 宁可少等，也不能让启动器关不掉。 */
+  if (!QUIT_BAK_WAITED && (EXIT_BAK_TIMER || BAK_INFLIGHT)) {
+    QUIT_BAK_WAITED = true;
+    e.preventDefault();
+    if (EXIT_BAK_TIMER) { clearTimeout(EXIT_BAK_TIMER); EXIT_BAK_TIMER = null; logLine('[backup] 退出时发现待执行的「退出后备份」，立即开始'); }
+    const job = (BAK_INFLIGHT || autoBackupSaves('exit', 90000)).catch(() => {});
+    const timeout = new Promise(r => setTimeout(() => r('timeout'), 3000));
+    Promise.race([job, timeout]).then(r => {
+      logLine(r === 'timeout'
+        ? '[backup] 退出等待超时（3s），放弃未完成的自动备份'
+        : '[backup] 退出前已等待自动备份完成');
+      app.quit();
+    });
+  }
 });
 app.on('will-quit', () => {
   logLine('[app] will-quit —— 进程即将结束');
@@ -10071,6 +10193,80 @@ function updateParserSelfTest() {
  * 公告「属于当前版本」：改完就往 version 与 APP_VERSION 相同的那条里加条目 ——
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
+  {
+    version: '1.3-snapshot2',
+    date: '2026-10-29',
+    /* 开发中的版本：公告没写完也不至于把自测打红。**打包前删掉这一行** */
+    dev: true,
+    tag: '1.3 快照版',
+    notice: '这一版没有新功能，全部在修「出问题时让你更安全」的细节：配置保存改成原子写（断电 / 磁盘满不会再让设置整份丢失，坏掉的配置会自动留一份备份）、关启动器时会等「退出后自动备份」跑完、正版账户启动不再误报「离线模式」、启动前命令不会被实例名里的特殊字符注入、开服同步模组能认出「同体积但内容不同」的文件、删除 MOD 改走回收站。',
+    groups: [
+      {
+        icon: 'i-drive',
+        title: '修复 · 设置不再可能整份丢失',
+        items: [
+          '**保存改成原子写**：先写临时文件、刷盘、再改名覆盖。以前直接覆盖原文件，写到一半断电 / 进程被杀 / 磁盘满就会留下半截 JSON',
+          '**坏配置自动留档**：如果下次启动发现配置解析不了，会把原文件改名成 `lmc.config.json.bad-<时间戳>` 留着，再用默认值启动，并在界面上告诉你 —— 以前是静默用默认值，原始内容还会被下一次保存覆盖',
+          '**保存失败会说**：磁盘满 / 文件被占用时，日志和界面都会明确提示「设置保存失败」，不再显示已保存却什么都没落盘'
+        ]
+      },
+      {
+        icon: 'i-clock',
+        title: '修复 · 关启动器不再吞掉「退出后自动备份」',
+        items: [
+          '关掉游戏后 2.5 秒内顺手关掉启动器，以前这次备份**根本不会开始**（定时器随进程一起消失）',
+          '现在退出前会先把它触发并等它跑完；备份正在写 zip 时关启动器也会等最多 3 秒，超时才放弃并写日志'
+        ]
+      },
+      {
+        icon: 'i-user',
+        title: '修复 · 启动成功的提示按登录方式显示',
+        items: [
+          '以前不管用什么账户都弹「游戏进程已启动（离线模式）」，正版玩家会以为登录失败、掉到离线了',
+          '现在按实际情况显示「微软正版登录 / 外置登录 / 离线模式」'
+        ]
+      },
+      {
+        icon: 'i-terminal',
+        title: '安全 · 启动前命令不再被实例名注入',
+        items: [
+          '`${gameDir}` / `${version}` 的取值来自游戏路径和实例名，导入整合包时实例名可能含 `& | < > ^ %` 这类 shell 特殊字符',
+          '含这些字符时**跳过这条可选脚本**并在日志 / 界面说明原因，不再把它拼进命令行执行'
+        ]
+      },
+      {
+        icon: 'i-server',
+        title: '修复 · 开服「同步模组」更准、失败可见',
+        items: [
+          '以前只比文件体积：体积相同但内容不同的 jar（换过构建 / 被替换过）会被判成「已同步」；现在按体积 + 修改时间判断，并在拷贝后对齐时间戳，避免每次都重拷',
+          '单个 mod 复制失败不再静默跳过：同步结果里会给出失败清单和数量'
+        ]
+      },
+      {
+        icon: 'i-trash',
+        title: '修复 · 删除 MOD 改走回收站',
+        items: [
+          '和存档 / 实例删除保持一致：先移入系统回收站，回收站不可用才退化为直接删除 —— 误删自己改过的 jar 还能捞回来'
+        ]
+      },
+      {
+        icon: 'i-feedback',
+        title: '修复 · 反馈页会翻页，条数不再虚报',
+        items: [
+          'Issue 超过 100 条后，更早的条目以前会静默消失、页面上的「共 N 条」也只是本页条数',
+          '现在顺着分页拉取（最多 5 页），还有更多没取时显示「已加载最近 N 条」并提示去 GitHub 看全部'
+        ]
+      },
+      {
+        icon: 'i-list',
+        title: '修复 · 模组清单截断会说明',
+        items: [
+          '超过 600 个模组时清单只列前 600 个，以前没有任何提示，两边都少了同一批时可能显示「完全一致」',
+          '现在截断时清单里会加一行说明，比对结论也会标注「清单已截断，之外的未比对」'
+        ]
+      }
+    ]
+  },
   {
     version: '1.3-snapshot1',
     date: '2026-10-28',
@@ -11401,6 +11597,9 @@ ipcMain.handle('diag:ai', async (_e, p) => {
  * GitHub 未登录接口限流 60 次/小时，所以结果在内存里缓存 10 分钟（点「刷新」可强制重取）。 */
 const FB_CORE = require('./src/feedback-core');
 const GH_ISSUES_API = 'https://api.github.com/repos/byzgdneo2/XLC-Launcher/issues?state=all&per_page=100&sort=updated&direction=desc';
+/* 未登录 60 次/小时的限流下，最多翻 5 页（500 条）——再多既慢又容易把配额用光。
+   翻页走 GitHub 返回的 Link: rel="next"，不自己拼 page 参数。 */
+const FB_MAX_PAGES = 5;
 const FB_CACHE_MS = 10 * 60 * 1000;
 let feedbackCache = { at: 0, data: null };
 ipcMain.handle('feedback:list', async (_e, p) => {
@@ -11409,24 +11608,44 @@ ipcMain.handle('feedback:list', async (_e, p) => {
     return Object.assign({}, feedbackCache.data, { cached: true });
   }
   try {
-    const r = await netFetch(GH_ISSUES_API, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'User-Agent': 'XLC-Launcher/' + APP_VERSION
+    /* 原来只取第一页 100 条：Issue 超过 100 之后更早的条目静默消失，「共 N 条」也只是本页条数（审计 F7）。
+       现在顺着 Link: rel="next" 翻页，最多 5 页；返回 truncated 表示「还有更多没取」，
+       界面据此显示「已加载最近 N 条」而不是谎报总数。 */
+    let url = GH_ISSUES_API;
+    const all = [];
+    let pages = 0, more = false;
+    while (url && pages < FB_MAX_PAGES) {
+      const r = await netFetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'User-Agent': 'XLC-Launcher/' + APP_VERSION
+        }
+      }, 12000);
+      if (!r.ok) {
+        if (pages === 0) {
+          const why = (r.status === 403 || r.status === 429)
+            ? 'GitHub 接口限流了（未登录每小时 60 次），过一会儿再试'
+            : 'GitHub 返回 HTTP ' + r.status;
+          return { ok: false, error: why + '。也可以点「在 GitHub 查看全部」直接看网页。' };
+        }
+        logLine('[feedback] 第 ' + (pages + 1) + ' 页取回失败（HTTP ' + r.status + '），只展示已拿到的 ' + all.length + ' 条');
+        break;
       }
-    }, 12000);
-    if (!r.ok) {
-      const why = (r.status === 403 || r.status === 429)
-        ? 'GitHub 接口限流了（未登录每小时 60 次），过一会儿再试'
-        : 'GitHub 返回 HTTP ' + r.status;
-      return { ok: false, error: why + '。也可以点「在 GitHub 查看全部」直接看网页。' };
+      const part = await r.json();
+      if (!Array.isArray(part)) break;
+      all.push(...part);
+      pages++;
+      const link = (r.headers && (r.headers.get('link') || r.headers.get('Link'))) || '';
+      const m = link.match(/<([^>]+)>\s*;\s*rel="next"/i);
+      url = (m && part.length) ? m[1] : '';
+      more = !!url;
+      if (part.length < 100) { url = ''; more = false; }
     }
-    const list = await r.json();
-    const sum = FB_CORE.feedbackSummarize(list);
+    const sum = FB_CORE.feedbackSummarize(all);
     const data = {
       ok: true, fetchedAt: Date.now(), total: sum.total, groups: sum.groups,
-      repo: 'byzgdneo2/XLC-Launcher'
+      pages, truncated: more, repo: 'byzgdneo2/XLC-Launcher'
     };
     feedbackCache = { at: Date.now(), data };
     return data;
@@ -13794,6 +14013,15 @@ function createWindow() {
     if (!HEADLESS && win && !win.isDestroyed()) {
       if (!win.isVisible()) logLine('[win] ready-to-show 兜底显示');
       win.show();
+    }
+  });
+  win.webContents.once('did-finish-load', () => {
+    /* 配置损坏的提示要等界面就绪再说（loadConfig 时 toast/日志都还没准备好） */
+    if (CONFIG_LOAD_WARN) {
+      const msg = CONFIG_LOAD_WARN;
+      CONFIG_LOAD_WARN = '';
+      logLine('[config] ' + msg);
+      toast(msg, 'warn');
     }
   });
   win.loadFile(path.join(ROOT, 'src', 'index.html'));

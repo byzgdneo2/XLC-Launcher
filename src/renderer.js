@@ -397,7 +397,10 @@ function fbRender(data) {
   });
   if (sub) {
     const t = data.fetchedAt ? new Date(data.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
-    sub.textContent = '共 ' + (Number(data.total) || 0) + ' 条 · ' + t + ' 取回' +
+    /* 翻页拉取后 total 是「实际取到的条数」；还有更多没取时明说是最近 N 条，
+       不再让用户以为这就是仓库全部（审计 F7） */
+    sub.textContent = (data.truncated ? '已加载最近 ' : '共 ') + (Number(data.total) || 0) + ' 条' +
+      (data.truncated ? '（更早的请点「在 GitHub 查看全部」）' : '') + ' · ' + t + ' 取回' +
       (data.cached ? '（缓存）' : '') + ' · 来源 GitHub Issues';
   }
 }
@@ -4082,7 +4085,7 @@ function renderModRows(instance) {
     });
     const del = el('button', 'btn ghost', '删除');
     del.addEventListener('click', async () => {
-      if (!(await askConfirm('删除 MOD「' + m.name + '」？', { danger: true }))) return;
+      if (!(await askConfirm('删除 MOD「' + m.name + '」？（移到回收站，可从系统回收站恢复）', { danger: true }))) return;
       const rr = await window.lmc.modsDelete({ name: m.name, instance });
       if (rr.ok) loadMods(); else toast('删除失败: ' + rr.error, 'error');
     });
@@ -5902,7 +5905,9 @@ function MA_SUMMARY() {
   if (d.missing.length) p.push('少 ' + d.missing.length + ' 个');
   if (d.extra.length) p.push('多 ' + d.extra.length + ' 个');
   if (d.differ.length) p.push('版本不同 ' + d.differ.length + ' 个');
-  return p.length ? p.join(' · ') : '完全一致（' + d.same + ' 个模组）';
+  const base = p.length ? p.join(' · ') : '完全一致（' + d.same + ' 个模组）';
+  /* 清单被截断时「完全一致」只覆盖前 600 条，必须说清楚（审计 F8） */
+  return d.truncated ? base + '（清单已截断到 600 条，之外的未比对）' : base;
 }
 
 function buildModalignCard() {
@@ -5964,7 +5969,9 @@ function renderModalignCard() {
     if (!r || !r.ok) { toast('读取模组失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
     MA_STATE.mine = r.text; MA_STATE.count = r.count; MA_STATE.instance = inst;
     note.style.display = '';
-    note.innerHTML = '我的清单：<b>' + r.count + '</b> 个模组（' + esc(inst || '全局 mods') + '）· 约 ' + r.text.length + ' 字节，可以直接发给朋友';
+    note.innerHTML = '我的清单：<b>' + r.count + '</b> 个模组（' + esc(inst || '全局 mods') + '）' +
+      (r.truncated ? ' · <b>目录里共 ' + r.total + ' 个，清单只列前 ' + r.count + ' 个</b>' : '') +
+      ' · 约 ' + r.text.length + ' 字节，可以直接发给朋友';
     refreshButtons();
   });
   $('#maCopyBtn').addEventListener('click', async () => {
@@ -7299,15 +7306,21 @@ async function syncServerMods(name) {
   catch (e) { r = { ok: false, error: e.message }; }
   if (!r || !r.ok) { toast('同步失败：' + ((r && r.error) || '未知错误'), 'error'); return; }
   const add = (r.added || []).length, upd = (r.updated || []).length, sk = (r.clientOnly || []).length;
+  const bad = (r.failed || []).length;
+  if (bad) {
+    /* 复制失败的 mod 不静默吞掉：以前只 continue，界面显示「已同步」但实际少了文件（审计 F5） */
+    toast('同步完成但有 ' + bad + ' 个失败：' + (r.failed || []).slice(0, 3).join(' / ') +
+      (bad > 3 ? ' …' : '') + '（多为文件被占用或无权限）', 'warn');
+  }
   if (!add && !upd) {
-    toast('服务端 mod 已是最新（已装 ' + (s ? s.modsCount : 0) + ' 个，跳过纯客户端 ' + sk + ' 个）');
+    if (!bad) toast('服务端 mod 已是最新（已装 ' + (s ? s.modsCount : 0) + ' 个，跳过纯客户端 ' + sk + ' 个）');
     return;
   }
   await loadServerList();
   renderServerList();
   showServerConsole(name);
-  toast('已同步 mod：新增 ' + add + '、更新 ' + upd + '，跳过纯客户端 ' + sk +
-    '。' + (s && s.running ? '请点「停止」再「启动」让 mod 生效。' : '可以启动服务器了。'), 'ok');
+  toast('已同步 mod：新增 ' + add + '、更新 ' + upd + (bad ? '、失败 ' + bad : '') + '，跳过纯客户端 ' + sk +
+    '。' + (s && s.running ? '请点「停止」再「启动」让 mod 生效。' : '可以启动服务器了。'), bad ? 'warn' : 'ok');
 }
 /* ---------------- 外网联机：把「陶瓦联机」接进服务器面板 ----------------
  * 独立服务器不像单机世界能「对局域网开放」，所以用法是：

@@ -15,8 +15,9 @@ function isModFile(name) {
   return /\.(jar|zip|litemod)$/i.test(String(name || ''));
 }
 
-/** 把 mods 目录扫出来的文件列表规整成清单项（过滤非模组、按名字排序、限长） */
-function normalizeMods(list) {
+/** 把 mods 目录扫出来的文件列表规整成清单项（过滤非模组、按名字排序、限长）
+ *  返回数组（兼容原有调用）；需要知道有没有被截断时用 normalizeModsInfo() */
+function normalizeModsInfo(list) {
   const out = [];
   for (const m of (list || [])) {
     const name = String((m && m.name) || '').trim();
@@ -29,14 +30,21 @@ function normalizeMods(list) {
     });
   }
   out.sort((a, b) => a.name.localeCompare(b.name, 'en'));
-  return out.slice(0, MAX_MODS);
+  const total = out.length;
+  return { mods: out.slice(0, MAX_MODS), total, truncated: total > MAX_MODS };
 }
+function normalizeMods(list) { return normalizeModsInfo(list).mods; }
 
 /** 生成清单文本 */
 function buildManifest(mods) {
-  const list = normalizeMods(mods);
+  const info = normalizeModsInfo(mods);
   const lines = [PREFIX];
-  for (const m of list) lines.push((m.sha1 ? m.sha1.slice(0, 12) : '-'.repeat(12)) + ' ' + m.size + ' ' + m.name);
+  for (const m of info.mods) lines.push((m.sha1 ? m.sha1.slice(0, 12) : '-'.repeat(12)) + ' ' + m.size + ' ' + m.name);
+  /* 截断要在清单里留痕：否则两边都少了同一批时会显示「完全一致」，
+     而用户以为 600 个之外的那些也对比过了（审计 F8）。# 开头是注释，老版本解析器会跳过。 */
+  if (info.truncated) {
+    lines.push('# 清单已截断：目录里共 ' + info.total + ' 个模组，这里只列出前 ' + MAX_MODS + ' 个（按文件名排序）');
+  }
   return lines.join('\n');
 }
 
@@ -48,20 +56,35 @@ function parseManifest(text) {
   const src = String(text || '').replace(/\r\n?/g, '\n');
   if (!src.trim()) return { ok: false, mods: [], error: '清单是空的' };
   const mods = [];
+  let total = 0;        /* 有效模组行总数（可能被 MAX_MODS 截断） */
+  let declared = 0;     /* 清单里「已截断：共 N 个」声明的原始总数 */
+  let sawTruncNote = false;
   for (const raw of src.split('\n')) {
     const line = raw.trim();
-    if (!line || line.startsWith('#') || /^XLC-MODS\/\d+$/i.test(line)) continue;
+    if (!line) continue;
+    if (line.startsWith('#')) {
+      /* 新版清单在截断时带一行注释：`# 清单已截断：目录里共 610 个模组，这里只列出前 600 个` */
+      if (/清单已截断/.test(line)) {
+        sawTruncNote = true;
+        const m2 = line.match(/共\s*(\d+)\s*个模组/);
+        if (m2) declared = Number(m2[1]) || 0;
+      }
+      continue;
+    }
+    if (/^XLC-MODS\/\d+$/i.test(line)) continue;
     /* 两种行：`sha1 size name` 或裸文件名 */
     const m = /^([0-9a-fA-F]{6,40}|-+)\s+(\d+)\s+(.+)$/.exec(line);
     if (m) {
-      mods.push({ sha1: /^[0-9a-fA-F]/.test(m[1]) ? m[1].toLowerCase() : '', size: Number(m[2]) || 0, name: m[3].trim() });
+      total++;
+      if (mods.length < MAX_MODS) mods.push({ sha1: /^[0-9a-fA-F]/.test(m[1]) ? m[1].toLowerCase() : '', size: Number(m[2]) || 0, name: m[3].trim() });
     } else if (isModFile(line)) {
-      mods.push({ sha1: '', size: 0, name: line });
+      total++;
+      if (mods.length < MAX_MODS) mods.push({ sha1: '', size: 0, name: line });
     }
-    if (mods.length >= MAX_MODS) break;
   }
-  if (!mods.length) return { ok: false, mods: [], error: '没在清单里找到 .jar / .zip 模组文件' };
-  return { ok: true, mods };
+  if (!mods.length) return { ok: false, mods: [], total: 0, truncated: false, error: '没在清单里找到 .jar / .zip 模组文件' };
+  if (declared > total) total = declared;
+  return { ok: true, mods, total, truncated: sawTruncNote || total > mods.length };
 }
 
 /**
@@ -98,7 +121,14 @@ function diffManifests(mineText, theirsText) {
 
   const byName = (x, y) => x.name.localeCompare(y.name, 'en');
   missing.sort(byName); extra.sort(byName); differ.sort((x, y) => x.name.localeCompare(y.name, 'en'));
-  return { ok: true, missing, extra, differ, same, mineCount: a.mods.length, theirsCount: b.mods.length };
+  return {
+    ok: true, missing, extra, differ, same,
+    mineCount: a.mods.length, theirsCount: b.mods.length,
+    /* 任一边被截断时「完全一致」并不可靠：600 个之外的差异看不到（审计 F8） */
+    mineTotal: a.total, theirsTotal: b.total,
+    mineTruncated: !!a.truncated, theirsTruncated: !!b.truncated,
+    truncated: !!(a.truncated || b.truncated)
+  };
 }
 
 /** 一行结论（界面标题 / 提示用） */
@@ -108,10 +138,11 @@ function diffSummary(d) {
   if (d.missing.length) parts.push('少 ' + d.missing.length + ' 个');
   if (d.extra.length) parts.push('多 ' + d.extra.length + ' 个');
   if (d.differ.length) parts.push('版本不同 ' + d.differ.length + ' 个');
-  return parts.length ? parts.join(' · ') : '完全一致（' + d.same + ' 个模组）';
+  const base = parts.length ? parts.join(' · ') : '完全一致（' + d.same + ' 个模组）';
+  return d.truncated ? base + '（清单已截断到 ' + MAX_MODS + ' 条，之外的未比对）' : base;
 }
 
 module.exports = {
-  PREFIX, MAX_MODS, isModFile, normalizeMods, buildManifest,
+  PREFIX, MAX_MODS, isModFile, normalizeMods, normalizeModsInfo, buildManifest,
   parseManifest, diffManifests, diffSummary
 };
