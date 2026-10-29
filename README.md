@@ -27,7 +27,7 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
 | 1.2 | `XLC-Launcher-1.2-portable.exe` | 正式版，建议日常使用 |
-| 1.3-snapshot1 | `XLC-Launcher-1.3-snapshot1-portable.exe` | 快照版，含存档备份、模组清单对齐、下载可停止等新功能，可能不稳定 |
+| 1.3-snapshot2 | `XLC-Launcher-1.3-snapshot2-portable.exe` | 快照版（最新），含存档备份、模组清单对齐、下载可停止，并修掉 8 个可靠性问题（配置原子写、退出备份、登录提示、启动命令注入等） |
 
 都是免安装便携版，双击即用；配置与游戏数据存在 exe 旁边的 `XLC数据`，不写注册表、不装系统服务。
 
