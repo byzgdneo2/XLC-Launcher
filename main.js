@@ -142,6 +142,7 @@ try {
    → 1.2-snapshot3（删加载器「推荐」标记、内置插件「模组翻译器」）→ 1.2-pre1（1.2 预发布：游戏设置「修改」页，PCL 式组件行）→ 1.2-rc1（1.2 候选：下载游戏与整合包暂时下架，只禁不删）→ 1.2-rc2（游戏设置资源包/光影包页 + 下载多线程提速 + Forge/NeoForge 安装映射预热）→ **1.2-rc3（侧边栏「反馈」入口直达 GitHub Issues）**→ 1.2-rc4（游戏诊断 v2：崩溃报告可选可析、规则 25 条、不限日志新旧）→ **1.2（正式版：诊断 v2 / 反馈入口转正 + 更新源 GitHub 优先、官网兜底）**
    → **1.3-snapshot1（1.3 首个快照：内置插件「存档备份」+「模组清单对齐」，插件首次能往宿主页面注入界面）**
    → 1.3-snapshot2（审计 F1~F8：配置原子写 + 坏文件备份、退出时等在跑的自动备份、启动提示按登录方式、启动前命令防注入、开服模组同步判定、删除 MOD 进回收站、反馈页翻页、清单截断提示）
+   → 1.3-snapshot3（综合源跨源去重：Modrinth 与 CurseForge 都收录的同一个 MOD 只显示一条，保留原本排在前面的那条；侧边栏「新功能投票」；安装 MOD 先选模组版本并按 Fabric/Forge/NeoForge/Quilt 分类；+ 审计 N1~N5：翻译器「开始翻译」按钮死锁、存档预览路径校验、翻译器读文件异常兜底、7 处下载按钮 try/finally、许可页链接转义）
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -150,7 +151,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.3-snapshot2';
+const APP_VERSION = '1.3-snapshot3';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -839,6 +840,10 @@ ipcMain.handle('mods:update', async (_e, p) => {
 const { mdToHtml } = require('./src/md-core');
 /* 中文搜索词的译文清洗（纯函数，单测在 qa/search-zh-unit.js） */
 const { hasCJK, enKeywordsFromTranslation } = require('./src/search-zh');
+/* 综合源跨源去重（纯函数，单测在 qa/search-dedupe-unit.js） */
+const SD_CORE = require('./src/search-dedupe-core');
+/* 模组版本列表的加载器归一化与筛选（纯函数，单测在 qa/modver-unit.js） */
+const MV_CORE = require('./src/modver-core');
 /* 内置插件「存档备份」：命名 / 保留策略 / 是否该备（纯函数，qa/savebackup-unit.js）
    + 自己写的流式 ZIP 读写（存档几十 MB，不能整包塞内存） */
 const SB_CORE = require('./src/savebackup-core');
@@ -1260,6 +1265,8 @@ function send(ch, payload) {
 const netStat = { real: 0, done: 0 };
 let netPhase = { name: '', startDone: 0, total: 0 };
 let netBps = 0, netLastReal = 0, netLastT = 0, netTimer = null;
+/* netTimer 是**刻意常驻**的进程级采样器（500ms 一次，算下载瞬时速度），随进程退出而结束，
+   不需要 clearInterval —— 机械检查里「有 setInterval 没配对 clear」报在这里是预期内（审计 N6）。 */
 function netAddReal(n) { netStat.real += n; netStat.done += n; }
 function netAddSkip(n) { netStat.done += n; }
 function netReset() {
@@ -3332,10 +3339,13 @@ async function combinedSearchInner(query, type, mcVersion, loader, page) {
       curseforgePoolRaw(query, type, mcVersion, loader, COMBINED_POOL, kws).catch(() => null)
     ]);
     if (!mr && !cf) throw new Error('Modrinth 与 CurseForge 都连不上（可先切回单个下载源）');
-    const seen = new Set();
-    const pool = [].concat(mr || [], cf || [])
-      .filter(h => { const k = h.src + ':' + h.id; if (seen.has(k)) return false; seen.add(k); return true; })
-      .sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+    /* 跨源去重：Sodium / JEI 这类两源都有的项目只留一条。
+       原来只按「源 + id」去重，挡不住跨源重复，列表里会并排出现同一个 MOD 的两条。
+       返回的 pool 已按下载量降序，且重复项保留的是「排在前面的那条」——这样去重只让列表
+       少几行重复，不会把这个项目的位置整体后移（固定留某一源会让列表看起来全部换掉）。 */
+    const ded = SD_CORE.dedupeAcrossSources(mr || [], cf || []);
+    const pool = ded.pool;
+    if (ded.dropped) logLine('[search] 综合源跨源去重：' + ded.dropped + ' 条重复项目已合并');
     ent = { pool, at: Date.now() };
     combinedCache.set(key, ent);
     if (combinedCache.size > cap) combinedCache.delete(combinedCache.keys().next().value);   /* 简单淘汰 */
@@ -3416,13 +3426,17 @@ function modAlreadyInstalledError(dest) {
   if (fs.existsSync(dest + '.disabled')) return '该 MOD 已安装但当前处于禁用状态（' + name + '.disabled），如需更新请先到「MOD 管理」页删除旧文件';
   return null;
 }
-/* 「没选版本」时安装 MOD：照 PCL 的做法问用户存哪里，不擅自塞进某个实例。
+/* 下载 mod 文件（目标必须是本地已安装的带加载器版本：MOD 要进具体版本的 mods 目录才生效）
+ * 没选版本时渲染层会先拦（toast 引导），这里再兜一层 —— 不猜实例、也不弹「另存为」。 */
+/* 「目标版本停在全部」时安装 MOD：问用户存哪里，不擅自塞进某个实例。
    顺序 = 先查出 jar 文件名 → 系统「选择保存位置」（默认落在 mods 目录、文件名预填）→ 下载到该路径。
    用户点取消就什么都不做（返回 canceled，界面按「已取消」提示，不当成安装失败）。 */
 const SMOKE_SAVE_MODE = String(process.env.LMC_SMOKE_SAVE_MODE || '');
 const SMOKE_SAVE_PATH = String(process.env.LMC_SMOKE_SAVE_PATH || '');
 async function installModPicked(p, dlsig) {
   logLine('[modsave] enter mode=' + SMOKE_SAVE_MODE + ' src=' + p.source + ' id=' + p.projectId);
+  /* 冒烟：模拟用户在系统对话框里点了「取消」——放在最前，取消轮不做任何网络请求 */
+  if (SMOKE_SAVE_MODE === 'cancel') return { ok: false, canceled: true };
   let fileName = '', url = '', cfFile = null;
   if (p.source === 'curseforge') {
     const modId = String(p.projectId || '').replace(/^cf/, '');
@@ -3448,10 +3462,7 @@ async function installModPicked(p, dlsig) {
   try { fs.mkdirSync(defDir, { recursive: true }); } catch (_) {}
   logLine('[modsave] file=' + fileName + ' defDir=' + defDir);
   let dest = '';
-  if (SMOKE_SAVE_MODE === 'cancel') {
-    /* 冒烟：模拟用户在系统对话框里点了「取消」 */
-    return { ok: false, canceled: true };
-  } else if (SMOKE_SAVE_MODE === 'path' && SMOKE_SAVE_PATH) {
+  if (SMOKE_SAVE_MODE === 'path' && SMOKE_SAVE_PATH) {
     /* 冒烟/自动化：不弹系统窗口，直接落到指定路径（生产环境这个变量不存在） */
     dest = SMOKE_SAVE_PATH;
   } else {
@@ -3476,13 +3487,56 @@ async function installModPicked(p, dlsig) {
   try { size = fs.statSync(dest).size; } catch (_) {}
   return { ok: true, saved: true, path: dest, size, file: path.basename(dest) };
 }
-/* 下载 mod 文件到 gd/mods（目标 = 本地已安装的带加载器版本） */
+/* 拉一个 MOD 的版本列表（渲染层「先选模组版本」弹窗用）：Modrinth / CurseForge 归一化。
+   每条都带归一化后的 loaders（Fabric / NeoForge / Forge …），弹窗按它做筛选按钮；
+   列表本身不按游戏版本筛 —— 用户要看的是「装哪个版本、哪个加载器」。 */
+ipcMain.handle('modrinth:mod-versions', async (_e, p) => {
+  try {
+    netReset();
+    let list = [];
+    if (p.source === 'curseforge') {
+      const modId = String(p.projectId || '').replace(/^cf/, '');
+      if (!/^\d+$/.test(modId)) throw new Error('CurseForge 项目 ID 无效');
+      /* CF 单页上限 50；加载器名字混在 gameVersions 里（如 'NeoForge'），交给 MV_CORE 认 */
+      const files = (await cfJson('/mods/' + modId + '/files?pageIndex=0&pageSize=50')).data || [];
+      files.sort((a, b) => new Date(b.fileDate || 0) - new Date(a.fileDate || 0));
+      list = files.map(f => ({
+        ref: String(f.id),
+        name: f.displayName || f.fileName || String(f.id),
+        date: f.fileDate || '',
+        filename: f.fileName || '',
+        size: f.fileSize || 0,
+        loaders: MV_CORE.loadersOf({ gameVersions: f.gameVersions || [] }),
+        gv: (f.gameVersions || []).filter(g => /^\d+\.\d+/.test(g))
+      }));
+    } else {
+      const vers = await mrJson('/project/' + encodeURIComponent(p.projectId) + '/version');
+      /* 上游一次给全量（Sodium 有几百个），留 120 条够翻；再多也没人一页页看 */
+      list = vers.slice(0, 120).map(v => {
+        const files = v.files || [];
+        const file = files.find(f => f.primary) || files.find(f => /\.jar$/i.test(f.filename || f.url)) || files[0] || {};
+        return {
+          ref: v.id,
+          name: v.version_number || v.name || v.id,
+          date: v.date_published || '',
+          filename: file.filename || '',
+          size: file.size || 0,
+          loaders: MV_CORE.loadersOf(v),
+          gv: (v.game_versions || []).slice(0, 4)
+        };
+      });
+    }
+    return { ok: true, versions: list, loaders: MV_CORE.collectLoaders(list) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 ipcMain.handle('modrinth:install-mod', async (_e, p) => {
   /* jobKey：渲染层生成的一次性任务号，点「停止」时凭它找到这个任务打断 */
   const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
   try {
     netReset();
-    /* 下载页「目标版本」停在「全部」（没选具体实例）→ 走「选择保存位置」，不猜实例 */
+    /* 目标版本停在「全部」= 没指定装到哪个实例 → 走「选择保存位置」，不猜实例 */
     if (p.pickPath && !p.instance) return await installModPicked(p, dlsig);
     const chain = await loadVersionChain(p.versionId, config.gameDir, 0);
     const mcVer = chain.rootId;
@@ -4129,7 +4183,14 @@ async function moveInstanceData(srcDir, dstDir) {
   for (const n of INST_DATA_DIRS) {
     const s = path.join(srcDir, n), d = path.join(dstDir, n);
     if (!fs.existsSync(s)) continue;
-    await fsp.rename(s, d).catch(() => { fs.cpSync(s, d, { recursive: true }); fs.rmSync(s, { recursive: true, force: true }); });
+    await fsp.rename(s, d).catch(() => {
+      /* 跨盘 / 被占用时 rename 会失败，退回复制再删。这里必须**先确认目标真的落地了再删源**：
+         cpSync 在个别环境（目标名含非 ASCII 字符时实测过）会「返回成功但什么也没复制」，
+         以前是无条件 rmSync —— 那等于把用户的 mods / saves 直接删空。 */
+      try { fs.cpSync(s, d, { recursive: true }); } catch (e) { logLine('[instance] 搬迁复制失败，保留原目录: ' + n + ' — ' + e.message); return; }
+      if (!fs.existsSync(d)) { logLine('[instance] 搬迁后目标不存在，保留原目录: ' + n); return; }
+      fs.rmSync(s, { recursive: true, force: true });
+    });
   }
   const osrc = path.join(srcDir, 'options.txt');
   if (fs.existsSync(osrc)) await fsp.rename(osrc, path.join(dstDir, 'options.txt')).catch(() => {});
@@ -5944,6 +6005,15 @@ ipcMain.handle('saves:list', async () => {
  *    别为了省一次 readdir 加记忆化：region 目录是玩家随时在写的活数据。 */
 ipcMain.handle('saves:preview', async (_e, p) => {
   const saveDir = String((p && p.path) || '');
+  /* 路径校验（审计 N2）：和 saves:delete 同口径 —— 只认游戏目录内、父目录叫 saves 的目录。
+     不校验的话，渲染层传什么就 existsSync 什么：可以拿它探「本机任意目录里有没有 level.dat」，
+     也能把任意位置的 .mca 读出来渲染成图。当前没有可用注入入口，但这层不该只靠上层转义。 */
+  {
+    const abs = path.resolve(saveDir || '.');
+    const rel = path.relative(path.resolve(config.gameDir), abs);
+    if (!saveDir || rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, error: '拒绝预览：目标不在游戏目录内' };
+    if (path.basename(path.dirname(abs)).toLowerCase() !== 'saves') return { ok: false, error: '拒绝预览：目标不是存档目录' };
+  }
   /* 预览期间打开的 .mca 句柄：正常返回 / 提前 return / 抛异常都要关。
      只在「正常读完」那条路径上 close，一旦 decodeHeightmap / scanTopBlocksOf / pngEncode
      抛错就会从外层 catch 直接返回，句柄越积越多 → 反复预览畸形存档最终 EMFILE（审计 B2）。
@@ -8559,7 +8629,12 @@ ipcMain.handle('translator:pick', async () => {
 ipcMain.handle('translator:inspect', async (_e, p) => {
   if (!pluginEnabled('translator')) throw new Error('插件「模组翻译器」已停用，请先在插件页启用');
   const st = trStatJar(p);
-  const buf = fs.readFileSync(st.path);
+  /* 读文件也放在能兜住的位置（审计 N3）：trStatJar 通过之后到这个 readFileSync 之间，
+     文件可能刚被杀软锁住 / 被用户删掉 / 权限变了。以前这行在 try 外，异常直接冒泡到
+     ipcMain.handle，渲染层收到的是原始 EACCES/EBUSY 报文，用户看不懂。 */
+  let buf = null;
+  try { buf = fs.readFileSync(st.path); }
+  catch (e) { return { ok: false, error: '无法读取该文件（可能正被其他程序占用）：' + ((e && e.message) || e) }; }
   let parsed = null;
   try { parsed = trReadLangs(buf); } finally { /* buf 在函数结束时自动释放 */ }
   const groups = parsed.groups;
@@ -10194,10 +10269,71 @@ function updateParserSelfTest() {
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
   {
+    version: '1.3-snapshot3',
+    date: '2026-10-31',
+    tag: '1.3 快照版',
+    notice: '这一版有三件事：修复综合下载源的去重方式 —— 同一个 MOD 只显示一条时，保留的是原本排在前面的那条，列表顺序不会被打乱；侧边栏新增「新功能投票」，直接在启动器里看 GitHub 讨论区的功能投票；另外安装 MOD 改成先选模组版本 —— 点「安装」先弹出版本列表，选定装哪个再装，不再闷头装最新。另外把审计里几处「按钮点不动」一起修了：翻译器选过全汉化的模组后「开始翻译」不再永久变灰，下载 / 安装按钮出错后也会恢复可点；存档预览补上了路径校验。',
+    groups: [
+      {
+        icon: 'i-search',
+        title: '修复 · 综合源里同一个 MOD 只显示一条',
+        items: [
+          '**同一份东西不再重复出现**：综合源会同时查 Modrinth 和 CurseForge，两边都收录的 MOD（Sodium、JEI、AppleSkin 这类）以前会在列表里并排两条 —— 现在只留一条',
+          '**怎么算「同一个」**：先比项目短名（slug，比如 `sodium`），再看标题 —— 「Iris Shaders」与 `iris-shaders` 这种写法不同也能认出来；只是长得像的两个项目（`sodium` / `sodiumx`）不会被误合并',
+          '**留排在前面的那条**：两条合并时保留下载量更高、原本位置更靠前的那条，下载量一样时优先 Modrinth（直链更稳、项目信息更全）',
+          '**列表顺序不会被打乱**：去重只是让列表少几行重复，其余项目的位置跟以前一样 —— 早先的做法是硬留某一源，会让被合并的项目整体后移、后面的长尾条目全被顶上来，看着像「整个列表都变了」',
+          '只影响「综合」源：单独选 Modrinth 或单独选 CurseForge 时结果与以前完全一样，CurseForge 独有的项目照常显示',
+          '**万一合错了**：两个源各有一个同名但其实是不同项目的 MOD 时会被合并成一条，这时把来源切到单个源就能看到全部'
+        ]
+      },
+      {
+        icon: 'i-vote',
+        title: '新增 · 侧边栏「新功能投票」',
+        items: [
+          '**下一个做什么功能，投票说了算**：侧边栏新增投票入口，点进去就是 GitHub 讨论区（Discussions）里的功能投票列表，不用再自己找网页',
+          '**投票进行中的排最前**：列表把投票帖顶在前面并带「投票中」标记，点开任意一条就能去投一票 —— 票数直接影响开发优先级',
+          '**真正投票在网页上**：投票要登录 GitHub，启动器里每一条点击都会打开对应的讨论页；想要的功能还没人提议时，可以先去讨论区开一个新帖',
+          '列表每 10 分钟缓存一次，可手动刷新；连不上 GitHub 时会说明原因，也可以点「在 GitHub 查看全部」直接看网页'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '改动 · 安装 MOD 前先选模组版本',
+        items: [
+          '**点「安装」先弹版本列表**：以前一点安装就闷头装最新文件，现在会先列出这个 MOD 的历史版本（版本号、日期、文件名、大小），你选定装哪个才下载 —— 想留在旧版本、避开刚出的 beta，都不用再去网页上翻',
+          '**按加载器分类**：弹窗顶部一排按钮 —— 全部 / Fabric / NeoForge / Forge / Quilt（只列这个 MOD 真有的那些，带版本数），点一下就只看该加载器的构建；目标实例是 Fabric 时默认就落在 Fabric 上，不会误装成 NeoForge 的文件',
+          '**版本最新在前**：列表按发布时间倒序，一屏最多 60 个（更多时标出总数）；第一个就是最新版，想装旧版往后翻就行',
+          '**装到哪由「目标版本」决定**：选了具体实例就装进它的 mods；停在「全部」时，选定模组版本后会弹系统「选择保存位置」让你自己挑目录',
+          '详情页每个文件旁的「安装」不变 —— 那本身就是选好了版本，点击直接装',
+          '原版（无 Fabric / Forge 等加载器）的实例仍会被拦下并说明原因',
+          '搜索浏览不受影响：下载页的目标版本仍默认「全部」，用来看全站资源、不筛版本'
+        ]
+      },
+      {
+        icon: 'i-tools',
+        title: '修复 · 按钮点了没反应 / 一直转圈',
+        items: [
+          '**翻译器的「开始翻译」不再永久变灰**：以前先选一个**已经全部汉化过**的模组（按钮按设计禁用），不重启再点「换一个」选个没汉化的 —— 待翻译条数显示正常，按钮却是灰的，点不动；唯一能恢复它的地方在「翻译跑完」之后，而按钮灰着根本跑不起来，只能重启启动器。现在每次切换模组都会把按钮状态复位',
+          '**下载 / 安装按钮不会再卡在「下载中…」**：主进程异常、通道临时不可用时，以前这一步会跳过收尾 —— 按钮永久禁用、「停止」监听还挂着，这个按钮在这一页里就彻底废了。现在无论成功、失败还是异常，都会摘掉「停止」、恢复按钮，出错时照常弹提示',
+          '同一处一并修好的还有整合包的按钮：以前装完之后按钮还停在「下载安装中…」，现在装完就回到「安装整合包」',
+          '**翻译器读不了 JAR 时说得清原因**：文件被杀软占用、刚被删掉、权限变了的时候，提示「无法读取该文件（可能正被其他程序占用）」，不再是 `EACCES` / `EBUSY` 这种原文'
+        ]
+      },
+      {
+        icon: 'i-lock',
+        title: '安全 · 存档预览只认游戏目录里的存档',
+        items: [
+          '**预览通道补上路径校验**：和「删除存档」同一条口径 —— 只接受「游戏目录内、父目录叫 `saves`」的目录。以前这条通道不校验路径，理论上可以拿它探本机任意目录里有没有存档、把任意位置的 `.mca` 读出来渲染成图',
+          '**正常使用完全不受影响**：全局存档（`.minecraft/saves`）和隔离实例里的存档（`versions/<实例>/saves`）都照常预览，列表里点得开',
+          '**实例搬家不再有删数据风险**：改加载器 / 切换隔离开关时要搬 `mods`、`saves` 这些目录，以前是「复制完就删原目录」—— 万一复制其实没落地（个别环境会「报告成功但什么也没复制」），原目录就被删空了。现在改成「确认目标真的存在才删源」，否则保留原目录并写日志',
+          '**许可页的链接地址做完整转义**：开源许可 / 第三方声明里若出现带引号的链接，不会再截断 HTML 属性（内容是我们自己打包的，属纵深加固）'
+        ]
+      }
+    ]
+  },
+  {
     version: '1.3-snapshot2',
     date: '2026-10-29',
-    /* 开发中的版本：公告没写完也不至于把自测打红。**打包前删掉这一行** */
-    dev: true,
     tag: '1.3 快照版',
     notice: '这一版没有新功能，全部在修「出问题时让你更安全」的细节：配置保存改成原子写（断电 / 磁盘满不会再让设置整份丢失，坏掉的配置会自动留一份备份）、关启动器时会等「退出后自动备份」跑完、正版账户启动不再误报「离线模式」、启动前命令不会被实例名里的特殊字符注入、开服同步模组能认出「同体积但内容不同」的文件、删除 MOD 改走回收站。',
     groups: [
@@ -11653,6 +11789,51 @@ ipcMain.handle('feedback:list', async (_e, p) => {
     return {
       ok: false,
       error: '取不到反馈列表：' + ((e && e.message) ? e.message : String(e)) +
+        '。可以点「在 GitHub 查看全部」直接看网页。'
+    };
+  }
+});
+
+/* ---------------- 「新功能投票」页（侧边栏） ----------------
+ * 列表来自 GitHub Discussions（https://github.com/byzgdneo2/XLC-Launcher/discussions）。
+ * 功能投票用讨论区的投票（Poll）发布：启动器只负责把讨论列表取回来展示，真正投一票
+ * 仍然要登录 GitHub 网页 —— 匿名拉不到 Poll 的票数（要 GraphQL 鉴权），所以列表不显示票数，
+ * 每一条点开都会落到对应讨论页。限流与缓存策略与反馈页一致（未登录 60 次/小时，缓存 10 分钟）。 */
+const VT_CORE = require('./src/vote-core');
+const GH_DISC_API = 'https://api.github.com/repos/byzgdneo2/XLC-Launcher/discussions?per_page=50';
+const VT_CACHE_MS = 10 * 60 * 1000;
+let voteCache = { at: 0, data: null };
+ipcMain.handle('vote:list', async (_e, p) => {
+  const force = !!(p && p.force);
+  if (!force && voteCache.data && Date.now() - voteCache.at < VT_CACHE_MS) {
+    return Object.assign({}, voteCache.data, { cached: true });
+  }
+  try {
+    const r = await netFetch(GH_DISC_API, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'XLC-Launcher/' + APP_VERSION
+      }
+    }, 12000);
+    if (!r.ok) {
+      const why = (r.status === 403 || r.status === 429)
+        ? 'GitHub 接口限流了（未登录每小时 60 次），过一会儿再试'
+        : 'GitHub 返回 HTTP ' + r.status;
+      return { ok: false, error: why + '。也可以点「在 GitHub 查看全部」直接看网页。' };
+    }
+    const arr = await r.json();
+    const sum = VT_CORE.voteSummarize(arr);
+    const data = {
+      ok: true, fetchedAt: Date.now(), total: sum.total, polls: sum.polls,
+      items: sum.items, repo: 'byzgdneo2/XLC-Launcher'
+    };
+    voteCache = { at: Date.now(), data };
+    return data;
+  } catch (e) {
+    return {
+      ok: false,
+      error: '取不到投票列表：' + ((e && e.message) ? e.message : String(e)) +
         '。可以点「在 GitHub 查看全部」直接看网页。'
     };
   }

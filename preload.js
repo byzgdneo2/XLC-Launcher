@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('lmc', {
   modrinthCfDesc: (p) => ipcRenderer.invoke('modrinth:cf-desc', p),
   modrinthTranslate: (p) => ipcRenderer.invoke('modrinth:translate', p),
   modrinthInstallMod: (p) => ipcRenderer.invoke('modrinth:install-mod', p),
+  /* 模组版本列表（安装前先选模组版本用） */
+  modrinthModVersions: (p) => ipcRenderer.invoke('modrinth:mod-versions', p),
   modrinthInstallModpack: (p) => ipcRenderer.invoke('modrinth:install-modpack', p),
   modrinthInstallPack: (p) => ipcRenderer.invoke('modrinth:install-pack', p),
   /* 内容下载（MOD/整合包/资源包/光影/数据包）的「停止」：凭渲染层生成的 jobKey 打断任务 */
@@ -98,6 +100,8 @@ contextBridge.exposeInMainWorld('lmc', {
   diagAi: (p) => ipcRenderer.invoke('diag:ai', p),
   /* 反馈页：仓库 Issue 按处理状态分组（force=true 表示忽略 10 分钟缓存，强制重取） */
   feedbackList: (p) => ipcRenderer.invoke('feedback:list', p),
+  /* 新功能投票页：GitHub Discussions 列表（force=true 强制重取，缓存同样 10 分钟） */
+  voteList: (p) => ipcRenderer.invoke('vote:list', p),
   accountList: () => ipcRenderer.invoke('account:list'),
   accountAdd: (p) => ipcRenderer.invoke('account:add', p),
   accountSwitch: (p) => ipcRenderer.invoke('account:switch', p),

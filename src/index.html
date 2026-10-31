@@ -37,6 +37,7 @@
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5.5"/></symbol>
     <symbol id="i-feedback" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.5 0-3-.4-4.3-1.1L3 20l1.1-5.2A8.5 8.5 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 12.5h4.5"/></symbol>
+    <symbol id="i-vote" viewBox="0 0 24 24"><path d="M3 11l2.2 9.2A2 2 0 0 0 7.1 22h9.8a2 2 0 0 0 1.9-1.8L21 11"/><path d="M12 22v-8"/><path d="M8 2h8a1 1 0 0 1 1 1v5H7V3a1 1 0 0 1 1-1z"/><path d="M9.5 5.5l2 2 3.5-3.5"/></symbol>
     <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5.5 12h13"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2M6.5 7l.8 13h9.4l.8-13M10 11v5.5M14 11v5.5"/></symbol>
     <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
@@ -112,6 +113,7 @@
       <button class="rail-btn" data-page="diag" title="诊断"><svg class="ic"><use href="#i-pulse"/></svg></button>
       <button class="rail-btn" data-page="import" title="导入"><svg class="ic"><use href="#i-import"/></svg></button>
       <button class="rail-btn" data-page="settings" title="设置"><svg class="ic"><use href="#i-settings"/></svg></button>
+      <button class="rail-btn" data-page="vote" id="btnVote" title="新功能投票"><svg class="ic"><use href="#i-vote"/></svg></button>
       <button class="rail-btn" data-page="feedback" id="btnFeedback" title="反馈"><svg class="ic"><use href="#i-feedback"/></svg></button>
     </nav>
     <div class="rail-bottom">
@@ -255,7 +257,7 @@
               <button class="active" data-src="all" title="两个源一起搜，按下载量排序（默认）">综合</button>
             </div>
             <label class="field">
-              <span>目标版本（选「全部」则安装时选择保存位置）</span>
+              <span>目标版本（搜索不筛版本；安装 MOD 先选模组版本，再决定装到哪）</span>
               <select id="resTarget"></select>
             </label>
           </div>
@@ -1156,6 +1158,27 @@
         </div>
       </section>
 
+      <!-- ===== 新功能投票页 ===== -->
+      <section class="page" id="page-vote">
+        <div class="page-head">
+          <div><h2>新功能投票</h2><p id="voteSub">下一个做什么功能，投票说了算 · 数据来自 GitHub Discussions（缓存 10 分钟）</p></div>
+          <button class="ghost-btn" id="voteRefresh"><svg class="ic sm"><use href="#i-refresh"/></svg> 刷新</button>
+        </div>
+
+        <div class="card fb-note">
+          <p>下面是正在进行的<b>功能投票</b>：点开任意一条，投出你想要的功能 —— 票数会直接影响开发的优先级。</p>
+          <p class="fb-tip">要是你想要的功能还没人提议，可以先到讨论区搜一搜有没有类似帖子；确实没有，就新开一个投票帖。</p>
+          <div class="fb-acts">
+            <button class="btn primary" id="voteGo"><svg class="ic sm"><use href="#i-vote"/></svg> 去投票</button>
+            <button class="btn ghost" id="voteAll"><svg class="ic sm"><use href="#i-external"/></svg> 在 GitHub 查看全部</button>
+          </div>
+        </div>
+
+        <div class="vt-list" id="voteList">
+          <div class="empty-sm">正在从 GitHub 取投票列表…</div>
+        </div>
+      </section>
+
       <!-- ===== 导入页 ===== -->
       <section class="page" id="page-import">
         <div class="page-head">
@@ -1533,6 +1556,10 @@
   <!-- 安装弹窗 -->
   <div class="modal-mask" id="modalMask" style="display:none">
     <div class="modal" id="modalBox"></div>
+  </div>
+  <!-- 模组版本选择弹窗（装 MOD 前先选装哪个版本；与游戏安装弹窗分开，互不打架） -->
+  <div class="modal-mask" id="mvMask" style="display:none">
+    <div class="modal" id="mvBox"></div>
   </div>
 
   <div id="toasts"></div>

@@ -766,6 +766,24 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 .md-sec{ font-size:12px; color:var(--tx2); margin-bottom:6px; }
 .md-frow{ padding:7px 10px; }
 .md-frow .btn{ padding:4px 12px; font-size:12px; }
+/* 模组版本选择弹窗（装 MOD 前先选版本） */
+.mv-sub{ font-size:12.5px; color:var(--tx2); margin:-4px 0 10px; }
+/* 加载器分类按钮（Fabric / NeoForge / Forge …，不是游戏版本） */
+.mv-tabs{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:9px; }
+.mv-tab{
+  padding:5px 11px; font-size:12px; border-radius:999px; cursor:pointer;
+  background:rgba(255,255,255,.04); border:1px solid var(--line2); color:var(--tx2);
+  transition:background .15s, color .15s, border-color .15s;
+}
+.mv-tab span{ opacity:.6; font-size:11px; margin-left:2px; }
+.mv-tab:hover{ color:var(--tx); border-color:rgba(255,255,255,.22); }
+.mv-tab.on{ background:rgba(96,165,250,.16); border-color:rgba(96,165,250,.55); color:#93c5fd; }
+.mv-more{ font-size:11.5px; color:var(--tx2); text-align:center; padding:6px 0 2px; }
+.mv-list{ max-height:min(52vh,460px); overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+.mv-list .ver-row{ padding:8px 10px; }
+.mv-list .ver-row .v-name{ width:auto; flex:1; min-width:0; }
+.mv-list .ver-row .v-name b{ font-size:13px; }
+.mv-list .ver-row .btn{ padding:4px 14px; font-size:12px; }
 .res-filter .field{ display:flex; flex-direction:column; gap:6px; }
 .res-filter .field span{ font-size:12px; color:var(--tx2); }
 .res-row{ align-items:center; gap:14px; }
@@ -1488,3 +1506,27 @@ body.turbo *{ text-shadow:none !important; backdrop-filter:none !important; filt
   background:rgba(251,191,36,.07); border:1px solid rgba(251,191,36,.25); color:#fcd34d;
   border-radius:var(--r-md); padding:14px 16px; font-size:12.5px; line-height:1.75;
 }
+
+/* ===== 新功能投票页（数据来自 GitHub Discussions，投票本体在网页里） ===== */
+.vt-list{ margin-top:14px; display:flex; flex-direction:column; gap:9px; }
+.vt-item{
+  display:flex; align-items:center; gap:10px; padding:11px 16px; cursor:pointer;
+  background:var(--card); border:1px solid var(--line); border-radius:var(--r-md);
+  transition:border-color .15s, background .13s;
+}
+.vt-item:hover{ border-color:var(--line2); background:var(--card2); }
+.vt-num{ flex:none; font-family:var(--mono); font-size:11.5px; color:var(--tx3); }
+.vt-title{ flex:1; min-width:0; font-size:12.5px; color:var(--tx); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vt-item:hover .vt-title{ color:var(--acc2); }
+.vt-cat{
+  flex:none; font-size:10.5px; color:var(--tx2); border:1px solid var(--line2);
+  border-radius:99px; padding:1px 8px; white-space:nowrap;
+}
+.vt-open{
+  flex:none; font-style:normal; font-size:10.5px; font-weight:600; color:#4ade80;
+  border:1px solid rgba(74,222,128,.35); background:rgba(74,222,128,.08);
+  border-radius:99px; padding:1px 8px; white-space:nowrap;
+}
+.vt-meta{ flex:none; font-size:11px; color:var(--tx3); min-width:62px; text-align:right; }
+.vt-empty{ padding:15px 18px; color:var(--tx3); font-size:12px; background:var(--card);
+  border:1px solid var(--line); border-radius:var(--r-md); }

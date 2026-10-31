@@ -322,6 +322,7 @@ function gotoPage(name) {
   if (name === 'download') requestAnimationFrame(() => moveTabInd($('#dlTabs'))); // 页面显示后再定位（隐藏时 offsetWidth 为 0）
   if (name === 'settings') refreshUpdatePane();
   if (name === 'feedback') loadFeedback(false);
+  if (name === 'vote') loadVote(false);
 }
 $$('#railNav .rail-btn').forEach(b => {
   /* 没有 data-page 的按钮不是页面入口，各自单独挂事件（目前侧栏全部都有页面） */
@@ -428,6 +429,87 @@ async function loadFeedback(force) {
 $('#fbGo').addEventListener('click', () => { window.lmc.openUrl(FB_NEW_URL).catch(() => {}); });
 $('#fbAll').addEventListener('click', () => { window.lmc.openUrl(FB_ISSUES_URL).catch(() => {}); });
 $('#fbRefresh').addEventListener('click', () => loadFeedback(true));
+
+/* ---------------- 新功能投票页 ----------------
+ * 列表来自 GitHub Discussions；投票本体在网页里（要登录 GitHub），所以每条都是跳转。 */
+const VOTE_URL = 'https://github.com/byzgdneo2/XLC-Launcher/discussions';
+let voteData = null;        /* 上一次成功/失败的结果（页面来回切不重复请求） */
+let voteLoading = false;
+function voteAgo(ts) {
+  if (!ts) return '';
+  const d = Math.max(0, Date.now() - ts);
+  const min = Math.floor(d / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return min + ' 分钟前';
+  const h = Math.floor(min / 60);
+  if (h < 24) return h + ' 小时前';
+  const day = Math.floor(h / 24);
+  if (day < 30) return day + ' 天前';
+  return new Date(ts).toLocaleDateString('zh-CN');
+}
+function voteItemHtml(it) {
+  const cat = it.catName ? '<i class="vt-cat">' + esc((it.catEmoji || '') + ' ' + it.catName) + '</i>' : '';
+  const open = it.isPoll ? '<i class="vt-open">投票中</i>' : '';
+  return '<div class="vt-item" data-url="' + esc(it.url) + '" title="' + esc(it.title) + '">' +
+    '<span class="vt-num">#' + (Number(it.n) || 0) + '</span>' +
+    '<span class="vt-title">' + esc(it.title) + '</span>' +
+    open +
+    cat +
+    '<span class="vt-meta">' + esc(voteAgo(it.createdAt)) + '</span>' +
+    '</div>';
+}
+function voteRender(data) {
+  const host = $('#voteList');
+  if (!host) return;
+  const sub = $('#voteSub');
+  if (!data || !data.ok) {
+    const msg = (data && data.error) ? data.error : '暂时取不到投票列表';
+    host.innerHTML = '<div class="fb-fail">' + esc(msg) + '</div>';
+    if (sub) sub.textContent = '暂时连不上 GitHub · 可以点上面的按钮直接看网页';
+    return;
+  }
+  const items = Array.isArray(data.items) ? data.items : [];
+  host.innerHTML = items.length
+    ? items.map(voteItemHtml).join('')
+    : '<div class="vt-empty">讨论区还没有投票帖 —— 点「去投票」开第一票。</div>';
+  /* 整块 innerHTML 重绘后旧元素脱离文档，必须重新取一遍再挂事件 */
+  $$('#voteList .vt-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const u = el.dataset.url;
+      if (u) window.lmc.openUrl(u).catch(() => {});
+    });
+  });
+  if (sub) {
+    const t = data.fetchedAt ? new Date(data.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+    const head = data.polls > 0 ? ('投票进行中 ' + data.polls + ' 个 · ') : '';
+    sub.textContent = head + '共 ' + (Number(data.total) || 0) + ' 条讨论 · ' + t + ' 取回' +
+      (data.cached ? '（缓存）' : '') + ' · 来源 GitHub Discussions';
+  }
+}
+async function loadVote(force) {
+  const host = $('#voteList');
+  if (!host) return;
+  if (!force && voteData && voteData.ok && (Date.now() - (voteData._at || 0) < 5 * 60 * 1000)) { voteRender(voteData); return; }
+  /* 失败的结论也留 1 分钟：GitHub 连不上时反复切页，不该每次都去重试一遍（每次要等 12 秒超时） */
+  if (!force && voteData && !voteData.ok && (Date.now() - (voteData._at || 0) < 60 * 1000)) { voteRender(voteData); return; }
+  if (voteLoading) return;
+  voteLoading = true;
+  const btn = $('#voteRefresh');
+  if (btn) btn.disabled = true;
+  if (!voteData) host.innerHTML = '<div class="empty-sm">正在从 GitHub 取投票列表…</div>';
+  let d;
+  try { d = await window.lmc.voteList({ force: !!force }); }
+  catch (e) { d = { ok: false, error: '取不到投票列表：' + ((e && e.message) ? e.message : String(e)) }; }
+  d = d || { ok: false, error: '取不到投票列表' };
+  d._at = Date.now();
+  voteData = d;
+  voteLoading = false;
+  if (btn) btn.disabled = false;
+  voteRender(d);
+}
+$('#voteGo').addEventListener('click', () => { window.lmc.openUrl(VOTE_URL).catch(() => {}); });
+$('#voteAll').addEventListener('click', () => { window.lmc.openUrl(VOTE_URL).catch(() => {}); });
+$('#voteRefresh').addEventListener('click', () => loadVote(true));
 
 /* ---------------- 窗口控制 ---------------- */
 $('#btnMin').addEventListener('click', () => window.lmc.win.minimize());
@@ -992,10 +1074,10 @@ function refreshAuxSelects() {
   const rest = S.installed.filter(v => !withLoader.includes(v));
   const opts = (list) => list.map(v => '<option value="' + esc(v.id) + '">' +
     esc(v.id) + (v.loader !== 'Vanilla' ? ' (' + esc(v.loader) + ')' : '') + '</option>').join('');
-  /* 目标版本：首项固定为「全部」（不筛 MC 版本与加载器，全站资源都能看到、都能直接安装）
-   * 默认停在「全部」—— 下载时不需要先装版本；装 MOD 时会弹「选择保存位置」让你自己挑目录，
-   * 选了具体实例才直接装进该实例的 mods */
-  target.innerHTML = '<option value="__all__">全部（安装时选择保存位置）</option>' + (opts(withLoader.concat(rest)) || '<option value="">（无已安装版本）</option>');
+  /* 目标版本：首项固定为「全部」（不筛 MC 版本与加载器，全站资源都能看到）
+   * 搜索浏览不需要先装版本；但**安装 MOD 必须选具体版本**（MOD 要进该版本的 mods 目录才生效），
+   * 停在「全部」时点安装会被引导去选版本 */
+  target.innerHTML = '<option value="__all__">全部（安装时先选模组版本，再选保存位置）</option>' + (opts(withLoader.concat(rest)) || '<option value="">（无已安装版本）</option>');
   /* 数据包存档下拉：实例隔离存档 value = "实例|世界名"，安装时写入实例目录的 datapacks */
   dw.innerHTML = S.saves.map(s =>
     '<option value="' + esc(s.instance ? s.instance + '|' + s.name : s.name) + '">' +
@@ -2185,7 +2267,9 @@ $('#btnClearCache').addEventListener('click', async () => {
 /* 开源许可与致谢：正文在 asar 里，用户点不开文件 —— 由主进程读出来在弹窗里显示。
    小型 markdown 渲染：只认标题 / 列表 / 表格分隔 / 粗体，够读许可声明即可。 */
 function renderLicMd(src) {
-  const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  /* 这里以前有一个局部 esc 覆盖了全局版（只转 & < >，不转引号）。正文都在文本节点里没问题，
+     但下面链接模板把地址拼进了 href="…" 属性上下文 —— 属性里必须连引号一起转（审计 N5），
+     所以直接复用全局 esc（& < > " ' 全转），不再自备一份。 */
   const inline = (t) => esc(t)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
@@ -2363,6 +2447,97 @@ async function pingSources(autoPick) {
     }
   }
 }
+/* ---------------- 模组版本选择：装 MOD 前先选装哪个版本 ---------------- */
+const mvMask = $('#mvMask'), mvBox = $('#mvBox');
+let mvToken = 0;                                       /* 每次打开自增：慢请求回来时别覆盖新弹窗 */
+function closeModVerPicker() {
+  if (!mvMask || mvMask.style.display === 'none') return;
+  mvMask.style.display = 'none';
+  mvToken++;
+}
+if (mvMask) mvMask.addEventListener('click', e => { if (e.target === mvMask) closeModVerPicker(); });
+/* 弹出版本列表；顶部按钮按**模组加载器**分类（Fabric / NeoForge / Forge …，不是游戏版本）。
+   选定后走 onPick(version)。列表来自 Modrinth / CurseForge 的真实文件记录。
+   preferLoader：目标实例的加载器，命中就默认选中那个按钮。 */
+async function openModVerPicker(h, source, onPick, preferLoader) {
+  if (!mvMask || !mvBox) return;
+  const tk = ++mvToken;
+  mvBox.innerHTML =
+    '<h3><svg class="ic sm"><use href="#i-puzzle"/></svg> 选择模组版本</h3>' +
+    '<div class="mv-sub">' + esc(h.title || '') + ' —— 先选要安装的版本，再决定装到哪</div>' +
+    '<div class="mv-tabs" id="mvTabs" style="display:none"></div>' +
+    '<div class="mv-list" id="mvList"><div class="empty-sm">正在获取版本列表…</div></div>' +
+    '<div class="mfoot"><button class="btn ghost" id="mvClose">关闭</button></div>';
+  mvMask.style.display = 'flex';
+  $('#mvClose').addEventListener('click', closeModVerPicker);
+  const r = await window.lmc.modrinthModVersions({ projectId: h.id, source }).catch(e => ({ ok: false, error: e.message }));
+  if (tk !== mvToken || mvMask.style.display === 'none') return;   /* 期间被关掉/换开了 */
+  const listEl = $('#mvList'), tabsEl = $('#mvTabs');
+  if (!r || !r.ok) {
+    listEl.innerHTML = '<div class="warnbar tip">获取版本列表失败：' + esc((r && r.error) || '网络异常') + '</div>';
+    return;
+  }
+  const all = r.versions || [];
+  if (!all.length) {
+    listEl.innerHTML = '<div class="warnbar tip">这个项目没有可下载的文件</div>';
+    return;
+  }
+  /* 加载器分类按钮：全部 + 列表里真实出现过的加载器（主进程已归一化，带数量） */
+  const chips = r.loaders || [];
+  const normLd = x => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
+  const pickable = ld => ld && ld !== '__all__'
+    ? all.filter(v => (v.loaders || []).some(n => normLd(n) === normLd(ld)))
+    : all.slice();
+  let cur = '__all__';
+  const want = normLd(preferLoader);
+  if (want && chips.some(c => normLd(c.name) === want)) cur = chips.find(c => normLd(c.name) === want).name;
+  const MAX_ROWS = 60;
+  function paint() {
+    if (chips.length) {
+      tabsEl.style.display = '';
+      tabsEl.innerHTML = '<button class="mv-tab' + (cur === '__all__' ? ' on' : '') + '" data-ld="__all__">全部 <span>' + all.length + '</span></button>' +
+        chips.map(c => '<button class="mv-tab' + (cur === c.name ? ' on' : '') + '" data-ld="' + esc(c.name) + '">' +
+          esc(c.name) + ' <span>' + c.count + '</span></button>').join('');
+      tabsEl.querySelectorAll('button.mv-tab').forEach(b => b.addEventListener('click', () => {
+        cur = b.dataset.ld;
+        paint();
+      }));
+    }
+    const list = pickable(cur);
+    const shown = list.slice(0, MAX_ROWS);
+    listEl.innerHTML = (shown.length ? shown.map((v, i) =>
+      '<div class="ver-row"><div class="v-name"><b>' + esc(v.name || v.ref) + '</b>' +
+      '<span class="res-meta">' + fmtDate(v.date) +
+      (v.filename ? ' · ' + esc(v.filename) : '') +
+      (v.loaders && v.loaders.length ? ' · ' + esc(v.loaders.join(' / ')) : '') +
+      (v.size ? ' · ' + (v.size / 1048576).toFixed(2) + ' MB' : '') +
+      '</span></div>' +
+      '<div class="v-act"><button class="btn primary mv-pick" data-i="' + i + '">安装</button></div></div>'
+    ).join('') : '<div class="empty-sm">这个加载器下没有可用的版本' + (chips.length ? ' —— 换一个加载器试试' : '') + '</div>')
+      + (list.length > shown.length ? '<div class="mv-more">共 ' + list.length + ' 个，只显示最近 ' + shown.length + ' 个</div>' : '');
+    listEl.querySelectorAll('button.mv-pick').forEach(b => b.addEventListener('click', () => {
+      const v = shown[+b.dataset.i];
+      closeModVerPicker();
+      onPick(v);
+    }));
+  }
+  paint();
+}
+/* 选定模组版本后真正落安装请求：目标实例选了就装进实例，停在「全部」走系统「选择保存位置」 */
+async function installModVersion(h, source, v, t, btn) {
+  const pickPath = !t || t === '__all__';
+  const jkMod = 'mod|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+  /* 收尾交给 dlGuarded（审计 N4）：reject 也不会让按钮卡在「下载中…」 */
+  const rr = await dlGuarded(btn, jkMod, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装', () =>
+    window.lmc.modrinthInstallMod(pickPath
+      ? { projectId: h.id, source, fileRef: v.ref, jobKey: jkMod, pickPath: true }
+      : { projectId: h.id, versionId: t, instance: t, source, fileRef: v.ref, jobKey: jkMod }));
+  if (rr.canceled) toast('已取消', 'warn');
+  else if (rr.cancelled) toast('已取消下载', 'warn');
+  else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+  else if (rr.saved) toast('MOD 已保存到: ' + rr.path);
+  else toast('已装入 ' + t + '：' + rr.file);
+}
 function setLat(elm, r) {
   if (!r.ok) { elm.textContent = '不可达'; elm.className = 'lat fail'; return; }
   elm.textContent = r.ms + ' ms';
@@ -2371,8 +2546,8 @@ function setLat(elm, r) {
 
 /* ---------------- MOD / 整合包下载页（Modrinth，两页共用内核） ---------------- */
 const RES_PAGE_SIZE = 20;
-/* 注：以前「全部」模式会用 pickModInstance() 自动挑一个带加载器的实例装进去。
-   现在不猜了 —— 没选版本就弹「选择保存位置」让用户自己挑（PCL 同款），见 installModPicked。 */
+/* 注：目标版本停在「全部」时安装会弹系统「选择保存位置」（不猜实例）；选定具体实例则装进它的 mods。
+   两种情况都要**先选模组版本** —— 点「安装」先弹版本列表，选定哪个装哪个（openModVerPicker）。 */
 /* 下载期间的「停止」：把安装按钮临时变成「停止」，点击打断主进程里对应 jobKey 的下载。
    按钮本体还挂着原来的安装 listener，所以下载期间要靠 dataset.busy 挡住二次触发 ——
    再点一下时先命中 busy 早退，随后才轮到这里挂的 stop listener 去执行取消。 */
@@ -2387,6 +2562,27 @@ function armDlStop(btn, jobKey) {
     btn.classList.remove('stop');
     delete btn.dataset.busy;
   };
+}
+/* 下载类按钮的统一收尾（审计 N4）：无论 invoke 成功、返回 { ok:false }，还是直接抛异常，
+   都必须在 finally 里摘掉「停止」监听、清掉忙标记、把按钮恢复成可点状态。
+   以前这七处都是「await → disarm → 恢复按钮」的直线写法，一旦 invoke reject
+   （主进程崩 / 通道没注册 / 序列化失败）就跳过收尾：按钮永久禁用、dataset.busy 残留、
+   停止监听器还挂着 —— 这个按钮在本页存活期内就彻底废了。
+   run() 抛错时统一折成 { ok:false, error }，调用方的 toast 分支照常走。 */
+async function dlGuarded(btn, jobKey, busyText, doneHtml, run) {
+  btn.dataset.busy = '1';
+  btn.disabled = true; btn.textContent = busyText;
+  const disarm = armDlStop(btn, jobKey);
+  try {
+    const r = await run();
+    /* 通道没返回对象时也折成失败结果，免得调用方读 rr.ok 时再抛一次 */
+    return (r && typeof r === 'object') ? r : { ok: false, error: '没有收到主进程的返回结果' };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  } finally {
+    disarm();
+    btn.disabled = false; btn.innerHTML = doneHtml;
+  }
 }
 function setupResPage(cfg) {
   let query = '', timer = null, page = 1, total = 0, fallback = false;
@@ -2537,79 +2733,49 @@ function setupResPage(cfg) {
         if (btn.dataset.busy === '1') return;   /* 下载期间点「停止」会再次进来：被忙标记挡住 */
         if (cfg.type === 'mod') {
           const t = $(cfg.targetSel).value;
-          /* 停在「全部」= 没指定装到哪个实例：不替用户猜，弹「选择保存位置」让他自己挑（PCL 同款）。
-             选了具体实例才直接装进该实例的 mods。 */
-          const pickPath = !t || t === '__all__';
-          if (!pickPath) {
-            const ti2 = S.installed.find(v => v.id === t);
-            if (ti2 && (ti2.loader === 'Vanilla' || !ti2.loader)) {
-              toast('「' + t + '」是原版（无模组加载器），MOD 无法生效 —— 请先安装 Fabric / Forge 版本', 'warn');
-              return;
-            }
+          const inst = (t && t !== '__all__') ? S.installed.find(v => v.id === t) : null;
+          if (inst && (inst.loader === 'Vanilla' || !inst.loader)) {
+            toast('「' + t + '」是原版（无模组加载器），MOD 无法生效 —— 请先安装 Fabric / Forge 版本', 'warn');
+            return;
           }
-          btn.dataset.busy = '1';
-          btn.disabled = true; btn.textContent = pickPath ? '选择保存位置…' : '下载中…';
-          const jkMod = 'mod|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const disarm = armDlStop(btn, jkMod);
-          const rr = await window.lmc.modrinthInstallMod(pickPath
-            ? { projectId: h.id, source: itemSrc(h), jobKey: jkMod, pickPath: true }
-            : { projectId: h.id, versionId: t, instance: t, source: itemSrc(h), jobKey: jkMod });
-          disarm();
-          btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装';
-          if (rr.canceled) toast('已取消', 'warn');
-          else if (rr.cancelled) toast('已取消下载', 'warn');
-          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
-          else if (rr.saved) toast('已保存到 ' + rr.path);
-          else toast('已装入 ' + t + '：' + rr.file);
+          /* 装 MOD 前先选模组版本：弹出版本列表（最新在前，可按加载器筛选），选定哪个装哪个。
+             选完之后目标实例选了就装进实例，停在「全部」则弹系统「选择保存位置」。
+             preferLoader：默认把分类切到目标实例的加载器（Fabric 实例只看 Fabric 构建）。 */
+          openModVerPicker(h, itemSrc(h), v => installModVersion(h, itemSrc(h), v, t, btn), inst && inst.loader);
         } else if (cfg.type === 'modpack') {
-          btn.dataset.busy = '1';
-          btn.disabled = true; btn.textContent = '下载安装中…';
           const jkMp = 'modpack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const disarmMp = armDlStop(btn, jkMp);
-          const rr = await window.lmc.modrinthInstallModpack({ projectId: h.id, name: h.title, jobKey: jkMp });
-          disarmMp();
+          const rr = await dlGuarded(btn, jkMp, '下载安装中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包', () =>
+            window.lmc.modrinthInstallModpack({ projectId: h.id, name: h.title, jobKey: jkMp }));
           dlTaskFinish(!!rr.ok, rr.error || '');
           if (!rr.ok) {
             toast(rr.cancelled ? '已取消下载' : '安装失败: ' + rr.error, rr.cancelled ? 'warn' : 'error');
-            btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包'; return;
+            return;
           }
           await scanDir();
           selectVersion(rr.versionId, true);
           toast('整合包就绪: ' + rr.versionId);
         } else if (cfg.type === 'resourcepack') {
-          btn.dataset.busy = '1';
-          btn.disabled = true; btn.textContent = '下载中…';
           const jkRp = 'resourcepack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const disarmRp = armDlStop(btn, jkRp);
-          const rr = await window.lmc.modrinthInstallPack({ type: 'resourcepack', projectId: h.id, jobKey: jkRp });
-          disarmRp();
-          btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装资源包';
+          const rr = await dlGuarded(btn, jkRp, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装资源包', () =>
+            window.lmc.modrinthInstallPack({ type: 'resourcepack', projectId: h.id, jobKey: jkRp }));
           if (rr.cancelled) toast('已取消下载', 'warn');
           else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
         } else if (cfg.type === 'shader') {
           /* 目标版本选「全部」→ 不指定实例，装到游戏根目录的 shaderpacks */
           const rawT = cfg.targetSel ? $(cfg.targetSel).value : '';
           const inst = rawT === '__all__' ? '' : rawT;
-          btn.dataset.busy = '1';
-          btn.disabled = true; btn.textContent = '下载中…';
           const jkSh = 'shader|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const disarmSh = armDlStop(btn, jkSh);
-          const rr = await window.lmc.modrinthInstallPack({ type: 'shader', projectId: h.id, instance: inst, source: itemSrc(h), jobKey: jkSh });
-          disarmSh();
-          btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 安装光影';
+          const rr = await dlGuarded(btn, jkSh, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装光影', () =>
+            window.lmc.modrinthInstallPack({ type: 'shader', projectId: h.id, instance: inst, source: itemSrc(h), jobKey: jkSh }));
           if (rr.cancelled) toast('已取消下载', 'warn');
           else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
           else toast('光影已装到 ' + (inst || '游戏根目录') + '：' + rr.file + '（游戏内用 Iris / OptiFine 选中即可生效）');
         } else { // datapack
           const w = cfg.targetSel ? $(cfg.targetSel).value : '';
           if (!w) { toast('请先选择一个存档（世界）', 'warn'); return; }
-          btn.dataset.busy = '1';
-          btn.disabled = true; btn.textContent = '下载中…';
           const jkDp = 'datapack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const disarmDp = armDlStop(btn, jkDp);
-          const rr = await window.lmc.modrinthInstallPack({ type: 'datapack', projectId: h.id, world: w, jobKey: jkDp });
-          disarmDp();
-          btn.disabled = false; btn.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 装入选中存档';
+          const rr = await dlGuarded(btn, jkDp, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 装入选中存档', () =>
+            window.lmc.modrinthInstallPack({ type: 'datapack', projectId: h.id, world: w, jobKey: jkDp }));
           if (rr.cancelled) toast('已取消下载', 'warn');
           else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
         }
@@ -4177,7 +4343,7 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
   const fileDest = kindName === 'datapack' ? '所选存档的 datapacks'
     : kindName === 'shader' ? '所选实例的 shaderpacks（选「全部」则放游戏根目录）'
       : kindName === 'resourcepack' ? '游戏目录的 resourcepacks'
-        : allMode ? '你自己选的保存位置' : '目标实例';
+        : '所选版本的 mods 目录（选「全部」则安装时选择保存位置）';
   const filesHtml = (r.files && r.files.length)
     ? '<div class="md-files"><div class="md-sec">适配 ' + esc(tid || '全部版本') + ' 的文件（最新 ' + r.files.length + ' 个，点击行内按钮安装到' + esc(fileDest) + '）</div>' +
       r.files.map((f, i) =>
@@ -4224,8 +4390,9 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
     const f = r.files[+b.dataset.fi];
     let tgt = tid;
     if (kindName === 'mod') {
-      /* 没指定实例（目标版本停在「全部」）→ 弹「选择保存位置」自己挑，不替用户猜 */
-      const pickPath = !tgt;
+      /* 详情页每个文件就是一个模组版本：点安装直接用该版本。
+         目标停在「全部」→ 系统「选择保存位置」；选定实例 → 装进该实例的 mods。 */
+      const pickPath = !tgt || tgt === '__all__';
       if (!pickPath) {
         const ti2 = S.installed.find(v => v.id === tgt);
         if (ti2 && (ti2.loader === 'Vanilla' || !ti2.loader)) {
@@ -4233,37 +4400,28 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
           return;
         }
       }
-      b.dataset.busy = '1';
-      b.disabled = true; b.textContent = pickPath ? '选择保存位置…' : '下载中…';
       const jk = 'mod|' + h.id + '|' + f.ref + '|' + Math.random().toString(36).slice(2, 8);
-      const disarm = armDlStop(b, jk);
-      const rr = await window.lmc.modrinthInstallMod(pickPath
-        ? { projectId: h.id, source, fileRef: f.ref, jobKey: jk, pickPath: true }
-        : { projectId: h.id, versionId: tgt, instance: tgt, source, fileRef: f.ref, jobKey: jk });
-      disarm();
-      b.disabled = false; b.textContent = '安装';
+      const rr = await dlGuarded(b, jk, pickPath ? '选择保存位置…' : '下载中…', '安装', () =>
+        window.lmc.modrinthInstallMod(pickPath
+          ? { projectId: h.id, source, fileRef: f.ref, jobKey: jk, pickPath: true }
+          : { projectId: h.id, versionId: tgt, instance: tgt, source, fileRef: f.ref, jobKey: jk }));
       if (rr.canceled) toast('已取消', 'warn');
       else if (rr.cancelled) toast('已取消下载', 'warn');
       else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
-      else if (rr.saved) toast('已保存到 ' + rr.path);
+      else if (rr.saved) toast('MOD 已保存到: ' + rr.path);
       else toast('已装入 ' + tgt + '：' + rr.file);
       return;
     }
     /* 数据包必须选中存档；资源包 / 光影装到各自固定目录（光影 tid 为空即游戏根目录，不必挑实例） */
     if (kindName === 'datapack' && !tgt) { toast('请先在下载页选择一个存档（世界）', 'warn'); return; }
-    b.dataset.busy = '1';
-    b.disabled = true; b.textContent = '下载中…';
     const jkP = kindName + '|' + h.id + '|' + f.ref + '|' + Math.random().toString(36).slice(2, 8);
-    const disarmP = armDlStop(b, jkP);
-    const rr = await window.lmc.modrinthInstallPack({
+    const rr = await dlGuarded(b, jkP, '下载中…', '安装', () => window.lmc.modrinthInstallPack({
       type: kindName, projectId: h.id, source,
       world: kindName === 'datapack' ? tgt : '',
       instance: kindName === 'shader' ? tgt : '',
       fileRef: f.ref,
       jobKey: jkP
-    });
-    disarmP();
-    b.disabled = false; b.textContent = '安装';
+    }));
     if (rr.cancelled) toast('已取消下载', 'warn');
     else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
     else toast('已安装：' + rr.file);
@@ -5275,6 +5433,8 @@ async function frHandleSignal(s) {
 
 function frSignalStart() {
   if (frSignalTimer) return;
+  /* 刻意常驻、不局限于好友页（邀请随时可能进来），只在整个界面卸载时随窗口结束；
+     机械检查会认为「没配对 clearInterval」——这里不动（审计 N6）。 */
   frSignalTimer = setInterval(async () => {
     try {
       const r = await window.lmc.friendsSignalPoll();
@@ -6130,6 +6290,12 @@ function trResetView() {
   const out = $('#trOutCard'); if (out) out.style.display = 'none';
   const file = $('#trFile'); if (file) { file.style.display = 'none'; file.innerHTML = ''; }
   const log = $('#trLog'); if (log) log.innerHTML = '';
+  /* 「开始翻译」只在「这个模组没有待翻译条目」时被禁用，而这里是把视图清空、
+     必然回到「没选 jar」的状态 —— 所以禁用必须在这里解除（审计 N1）。
+     以前只在 trInspect 的 todo>0 分支之外的那条路上禁用、却没有任何地方恢复：
+     选一个已全汉化的 jar → 按钮灰掉；再「换一个」选未汉化的 jar → 按钮还是灰的，
+     唯一能恢复的 trSetRunning(false) 只在翻译跑完后调用，而按钮灰着根本跑不了 → 死锁到重启。 */
+  const run = $('#btnTrRun'); if (run) run.disabled = !!TRP.running;
   trBar(0, '准备就绪');
 }
 async function initTranslatorPane() {
