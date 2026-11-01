@@ -1526,7 +1526,8 @@ const DL_HEAD = {
   modpack: ['下载整合包', '搜索整合包并一键下载安装，自动创建带加载器的实例'],
   resourcepack: ['下载资源包', '搜索资源包并装入游戏目录的 <b>resourcepacks</b>'],
   shader: ['下载光影', '从 <b>Modrinth</b> / <b>CurseForge</b> 搜索光影包，装进 <b>shaderpacks</b> 目录，游戏内用 <b>Iris / OptiFine</b> 选中即可生效'],
-  datapack: ['下载数据包', '搜索数据包并装入指定存档的 <b>datapacks</b> 文件夹（进入世界后自动生效）']
+  datapack: ['下载数据包', '搜索数据包并装入指定存档的 <b>datapacks</b> 文件夹（进入世界后自动生效）'],
+  world: ['下载世界', '从 <b>CurseForge</b> 搜索现成的世界存档，一键装进游戏目录的 <b>saves</b>，进游戏「单人游戏」即可打开']
 };
 function updateDlHead(cat) {
   const h = DL_HEAD[cat] || DL_HEAD.release;
@@ -2590,7 +2591,7 @@ function setupResPage(cfg) {
   /* MOD 页可切换下载源：modrinth | curseforge | all（综合 = 两源合并，按下载量降序）
      默认值直接读 HTML 上带 .active 的按钮（当前是「综合」），避免两处写死互相失配 */
   let source = (function () {
-    if (!cfg.sourceSel) return 'modrinth';
+    if (!cfg.sourceSel) return cfg.source || 'modrinth';
     const a = $(cfg.sourceSel + ' button.active');
     return (a && a.dataset.src) || 'modrinth';
   })();
@@ -2609,8 +2610,8 @@ function setupResPage(cfg) {
       newSearch();
     }));
   }
-  const TYPE_NAME = { mod: 'MOD', modpack: '整合包', resourcepack: '资源包', shader: '光影', datapack: '数据包' };
-  const TYPE_ICON = { mod: 'i-puzzle', modpack: 'i-package', resourcepack: 'i-box', shader: 'i-shader', datapack: 'i-sq' };
+  const TYPE_NAME = { mod: 'MOD', modpack: '整合包', resourcepack: '资源包', shader: '光影', datapack: '数据包', world: '世界' };
+  const TYPE_ICON = { mod: 'i-puzzle', modpack: 'i-package', resourcepack: 'i-box', shader: 'i-shader', datapack: 'i-sq', world: 'i-globe' };
   const typeName = TYPE_NAME[cfg.type] || cfg.type;
   const box = $(cfg.list);
   const inputEl = $(cfg.search);
@@ -2725,7 +2726,8 @@ function setupResPage(cfg) {
       gpMark(nameEl);                  /* 资源行标题可点开详情 → 手柄也要够得着 */
       nameEl.addEventListener('click', () => openResDetail(h, itemSrc(h), cfg.targetSel, typeName, cfg.type));
       const btnLabel = cfg.type === 'mod' ? '安装' : cfg.type === 'modpack' ? '安装整合包'
-        : cfg.type === 'resourcepack' ? '安装资源包' : cfg.type === 'shader' ? '安装光影' : '装入选中存档';
+        : cfg.type === 'resourcepack' ? '安装资源包' : cfg.type === 'shader' ? '安装光影'
+          : cfg.type === 'world' ? '安装世界' : '装入选中存档';
       const btn = el('button', 'btn primary', '<svg class="ic sm"><use href="#i-download"/></svg> ' + btnLabel);
       const dbtn = el('button', 'btn ghost', '详情');
       dbtn.addEventListener('click', () => openResDetail(h, itemSrc(h), cfg.targetSel, typeName, cfg.type));
@@ -2770,6 +2772,17 @@ function setupResPage(cfg) {
           if (rr.cancelled) toast('已取消下载', 'warn');
           else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
           else toast('光影已装到 ' + (inst || '游戏根目录') + '：' + rr.file + '（游戏内用 Iris / OptiFine 选中即可生效）');
+        } else if (cfg.type === 'world') {
+          /* 世界（存档）：只走 CurseForge，装到 gameDir/saves/<名字>；不跟随实例 */
+          const jkWd = 'world|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+          const rr = await dlGuarded(btn, jkWd, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装世界', () =>
+            window.lmc.worldInstall({ source: itemSrc(h), projectId: h.id, name: h.title, jobKey: jkWd }));
+          if (rr.cancelled) toast('已取消下载', 'warn');
+          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          else {
+            toast('世界已装好：' + rr.dir + '（存档页可见）');
+            renderSavesPage(true).catch(() => {});
+          }
         } else { // datapack
           const w = cfg.targetSel ? $(cfg.targetSel).value : '';
           if (!w) { toast('请先选择一个存档（世界）', 'warn'); return; }
@@ -2816,13 +2829,16 @@ const mpPage = setupResPage({ type: 'modpack', search: '#mpSearch', list: '#mpLi
 const rpPage = setupResPage({ type: 'resourcepack', search: '#rpSearch', list: '#rpList', pager: '#rpPager' });
 const spPage = setupResPage({ type: 'shader', search: '#spSearch', list: '#spList', pager: '#spPager', targetSel: '#spTarget', targetType: 'version' });
 const dpPage = setupResPage({ type: 'datapack', search: '#dpSearch', list: '#dpList', pager: '#dpPager', targetSel: '#dpWorld', targetType: 'world' });
+/* 世界（存档）只有 CurseForge 一个源 —— Modrinth 没有 world 项目类型，所以不给源切换按钮 */
+const wdPage = setupResPage({ type: 'world', search: '#wdSearch', list: '#wdList', pager: '#wdPager', source: 'curseforge' });
 /* 下载页资源类 tab → 区块/工厂实例映射 */
 const DL_RES_TABS = {
   mod: { area: 'resArea', page: () => modPage },
   modpack: { area: 'mpArea', page: () => mpPage },
   resourcepack: { area: 'rpArea', page: () => rpPage },
   shader: { area: 'spArea', page: () => spPage },
-  datapack: { area: 'dpArea', page: () => dpPage }
+  datapack: { area: 'dpArea', page: () => dpPage },
+  world: { area: 'wdArea', page: () => wdPage }
 };
 function fmtNum(n) {
   n = Number(n) || 0;
@@ -4317,7 +4333,7 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
   const rawTid = targetSel ? $(targetSel).value : '';
   const allMode = rawTid === '__all__';
   const tid = allMode ? '' : rawTid;
-  const r = await window.lmc.modrinthDetail({ source, projectId: h.id, versionId: tid });
+  const r = await window.lmc.modrinthDetail({ source, projectId: h.id, versionId: tid, kind: kind || 'mod' });
   if (!r.ok) {
     modalBox.innerHTML = '<h3><svg class="ic sm"><use href="#i-puzzle"/></svg> 详情</h3>' +
       '<div class="empty-sm">详情加载失败：' + esc(r.error || '') + '</div>' +
@@ -4341,9 +4357,10 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
   if (r.sourceUrl) links.push('<button class="btn ghost" id="mdRepo"><svg class="ic sm"><use href="#i-globe"/></svg> 源代码</button>');
   const kindName = kind || 'mod';
   const fileDest = kindName === 'datapack' ? '所选存档的 datapacks'
-    : kindName === 'shader' ? '所选实例的 shaderpacks（选「全部」则放游戏根目录）'
-      : kindName === 'resourcepack' ? '游戏目录的 resourcepacks'
-        : '所选版本的 mods 目录（选「全部」则安装时选择保存位置）';
+    : kindName === 'world' ? '游戏目录的 saves（每个文件会新建一个世界文件夹）'
+      : kindName === 'shader' ? '所选实例的 shaderpacks（选「全部」则放游戏根目录）'
+        : kindName === 'resourcepack' ? '游戏目录的 resourcepacks'
+          : '所选版本的 mods 目录（选「全部」则安装时选择保存位置）';
   const filesHtml = (r.files && r.files.length)
     ? '<div class="md-files"><div class="md-sec">适配 ' + esc(tid || '全部版本') + ' 的文件（最新 ' + r.files.length + ' 个，点击行内按钮安装到' + esc(fileDest) + '）</div>' +
       r.files.map((f, i) =>
@@ -4410,6 +4427,20 @@ async function openResDetail(h, source, targetSel, typeName, kind) {
       else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
       else if (rr.saved) toast('MOD 已保存到: ' + rr.path);
       else toast('已装入 ' + tgt + '：' + rr.file);
+      return;
+    }
+    /* 世界：直接下载该文件并解到 saves —— 不必挑存档，也不经过「并入已有存档」那套 */
+    if (kindName === 'world') {
+      const jkW = 'world|' + h.id + '|' + f.ref + '|' + Math.random().toString(36).slice(2, 8);
+      const rr = await dlGuarded(b, jkW, '下载中…', '安装', () => window.lmc.worldInstall({
+        source, projectId: h.id, name: h.title, fileRef: f.ref, jobKey: jkW
+      }));
+      if (rr.cancelled) toast('已取消下载', 'warn');
+      else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+      else {
+        toast('世界已装好：' + rr.dir + '（存档页可见）');
+        renderSavesPage(true).catch(() => {});
+      }
       return;
     }
     /* 数据包必须选中存档；资源包 / 光影装到各自固定目录（光影 tid 为空即游戏根目录，不必挑实例） */

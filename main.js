@@ -143,6 +143,7 @@ try {
    → **1.3-snapshot1（1.3 首个快照：内置插件「存档备份」+「模组清单对齐」，插件首次能往宿主页面注入界面）**
    → 1.3-snapshot2（审计 F1~F8：配置原子写 + 坏文件备份、退出时等在跑的自动备份、启动提示按登录方式、启动前命令防注入、开服模组同步判定、删除 MOD 进回收站、反馈页翻页、清单截断提示）
    → 1.3-snapshot3（综合源跨源去重：Modrinth 与 CurseForge 都收录的同一个 MOD 只显示一条，保留原本排在前面的那条；侧边栏「新功能投票」；安装 MOD 先选模组版本并按 Fabric/Forge/NeoForge/Quilt 分类；+ 审计 N1~N5：翻译器「开始翻译」按钮死锁、存档预览路径校验、翻译器读文件异常兜底、7 处下载按钮 try/finally、许可页链接转义）
+   → 1.3-snapshot4（新增「世界」下载：下载页新分栏，从 CurseForge 搜现成存档（classId 17），装进 gameDir/saves，同名自动加序号，流式解压 + 失败清理）
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -151,7 +152,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.3-snapshot3';
+const APP_VERSION = '1.3-snapshot4';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -844,6 +845,8 @@ const { hasCJK, enKeywordsFromTranslation } = require('./src/search-zh');
 const SD_CORE = require('./src/search-dedupe-core');
 /* 模组版本列表的加载器归一化与筛选（纯函数，单测在 qa/modver-unit.js） */
 const MV_CORE = require('./src/modver-core');
+/* 世界下载：存档目录名清洗 / zip 内层前缀识别 / 重名避让（纯函数，单测在 qa/world-unit.js） */
+const WLD_CORE = require('./src/world-core');
 /* 内置插件「存档备份」：命名 / 保留策略 / 是否该备（纯函数，qa/savebackup-unit.js）
    + 自己写的流式 ZIP 读写（存档几十 MB，不能整包塞内存） */
 const SB_CORE = require('./src/savebackup-core');
@@ -2690,13 +2693,17 @@ ipcMain.handle('modrinth:detail', async (_e, p) => {
           if (du) out.gallery.push(du);
         } catch (_) {}
       }
-      if (p.versionId) {
-        const lt = CF_LOADER[loaderLc] || 0;
+      if (p.versionId || p.kind === 'world') {
+        /* 世界没有「目标版本」可选（存档不分加载器 / 实例），直接把最新的几个文件列出来 */
+        const lt = p.kind === 'world' ? 0 : (CF_LOADER[loaderLc] || 0);
         let files = [];
-        for (const u of [
-          '/mods/' + modId + '/files?gameVersion=' + encodeURIComponent(mcVer) + (lt ? '&modLoaderType=' + lt : '') + '&pageSize=12',
-          '/mods/' + modId + '/files?gameVersion=' + encodeURIComponent(mcVer) + '&pageSize=12'
-        ]) { files = (await cfJson(u).catch(() => ({ data: [] }))).data || []; if (files.length) break; }
+        const urls = p.kind === 'world'
+          ? ['/mods/' + modId + '/files?pageIndex=0&pageSize=12']
+          : [
+            '/mods/' + modId + '/files?gameVersion=' + encodeURIComponent(mcVer) + (lt ? '&modLoaderType=' + lt : '') + '&pageSize=12',
+            '/mods/' + modId + '/files?gameVersion=' + encodeURIComponent(mcVer) + '&pageSize=12'
+          ];
+        for (const u of urls) { files = (await cfJson(u).catch(() => ({ data: [] }))).data || []; if (files.length) break; }
         files.sort((a, b) => new Date(b.fileDate || 0) - new Date(a.fileDate || 0));
         out.files = files.slice(0, 8).map(f => ({
           ref: String(f.id), name: f.displayName || f.fileName, date: f.fileDate, size: f.fileLength || 0,
@@ -3221,8 +3228,8 @@ async function modrinthSearchInner(query, type, mcVersion, loader, page) {
 /* ---------------- CurseForge 源（MCIM 镜像代理 /curseforge，免 API key） ----------------
  * 官方 api.curseforge.com 需要 key；MCIM 镜像提供免 key 代理，转发 /v1 全部端点 */
 const CF_API = 'https://mod.mcimirror.top/curseforge/v1';
-/* classId 见 CurseForge 官方类目表：6=Mods 4471=Modpacks 12=Resource Packs 6552=Shaders 6945=Data Packs */
-const CF_CLASS = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552, datapack: 6945 };
+/* classId 见 CurseForge 官方类目表：6=Mods 4471=Modpacks 12=Resource Packs 6552=Shaders 6945=Data Packs 17=Worlds */
+const CF_CLASS = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552, datapack: 6945, world: 17 };
 const CF_LOADER = { forge: 1, fabric: 4, neoforge: 5, quilt: 6 };
 async function cfJson(p) {
   let lastErr = null;
@@ -3398,6 +3405,11 @@ async function cfDownload(file, dest, onProgress, extSignal) {
 ipcMain.handle('modrinth:search', async (_e, p) => {
   try {
     const src = (p && p.source) || 'modrinth';
+    /* 世界是 CurseForge 独有的类目（Modrinth 没有 world 项目类型）：
+       走到 Modrinth / 综合分支只会把 project_type 兜底成 mod，搜出一堆 MOD —— 直接拦住 */
+    if (p && p.type === 'world' && src !== 'curseforge') {
+      return { ok: false, error: '世界下载只支持 CurseForge 源' };
+    }
     const r = src === 'curseforge'
       ? await curseforgeSearchInner(p.query, p.type, p.mcVersion, p.loader, p.page)
       : src === 'all'
@@ -3660,6 +3672,57 @@ ipcMain.handle('modrinth:install-pack', async (_e, p) => {
         : typeName + '已安装: ' + path.basename(dest));
     return { ok: true, file: path.basename(dest) };
   } catch (e) {
+    setStatus('就绪');
+    return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
+  } finally { if (p.jobKey) dlRelease(p.jobKey); }
+});
+/* ---------------- 世界（存档）下载：CurseForge 源 ----------------
+ * Modrinth 没有「世界」这个项目类型，所以世界只走 CurseForge（classId 17）。
+ * 装法：下载 zip → 认出 level.dat 所在的那一层 → 整层剥前缀解到 saves/<名字>/。
+ *
+ * 为什么不用 zipio / ZIPW.extractZipTo：那两套都是「整包读进内存」的写法
+ * （readFileSync + inflateRawSync），存档动辄几百 MB，峰值内存要到 2~3 倍。
+ * 解压实现放在 src/world-core.js（只把中央目录读进内存，数据段 fs 流 → zlib 流 → 落盘）。 */
+ipcMain.handle('world:install', async (_e, p) => {
+  const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
+  let outDir = '';
+  try {
+    netReset();
+    if ((p.source || 'curseforge') !== 'curseforge') throw new Error('世界下载目前只支持 CurseForge 源');
+    const modId = String(p.projectId || '').replace(/^cf/, '');
+    if (!/^\d+$/.test(modId)) throw new Error('CurseForge 项目 ID 无效');
+    const files = (await cfJson('/mods/' + modId + '/files?pageIndex=0&pageSize=50')).data || [];
+    if (!files.length) throw new Error('这个世界没有可下载的文件');
+    files.sort((a, b) => new Date(b.fileDate || 0) - new Date(a.fileDate || 0));
+    const file = (p.fileRef && files.find(f => String(f.id) === String(p.fileRef))) || files[0];
+    if (!file || !file.fileName) throw new Error('没有可下载的文件');
+    if (!WLD_CORE.isZipLike(file.fileName)) {
+      throw new Error('这个世界的文件是 ' + (path.extname(file.fileName) || '未知') +
+        ' 格式，启动器只支持 .zip —— 可以先到网页下载再手动解压到 saves 目录');
+    }
+    const savesBase = path.join(config.gameDir, 'saves');
+    await fsp.mkdir(savesBase, { recursive: true });
+    const wantName = WLD_CORE.sanitizeName(p.name || file.displayName || file.fileName.replace(/\.[^.]+$/, ''));
+    const dirName = WLD_CORE.uniqueName(wantName, nm => fs.existsSync(path.join(savesBase, nm)));
+    outDir = path.join(savesBase, dirName);
+    const tmp = path.join(os.tmpdir(), 'xlc-world-' + process.pid + '-' + Date.now() + '.zip');
+    setStatus('下载世界: ' + file.fileName, true);
+    try {
+      await cfDownload(file, tmp, () => {}, dlsig);
+      const names = await WLD_CORE.listNames(tmp);
+      const prefix = WLD_CORE.detectPrefix(names);
+      if (prefix === null) throw new Error('这个压缩包里没有 level.dat，看起来不是 Minecraft 世界存档');
+      const n = await WLD_CORE.extractZipStream(tmp, outDir, prefix);
+      if (!n) throw new Error('压缩包里没有可解出的文件');
+      setStatus('就绪');
+      toast('世界已装好：' + dirName + '（存档页可见，进游戏点「单人游戏」就能打开）');
+      return { ok: true, dir: dirName, files: n };
+    } finally {
+      await fsp.unlink(tmp).catch(() => {});
+    }
+  } catch (e) {
+    /* 解到一半失败：把这次的半个目录删掉，别在存档列表里留一个打不开的世界 */
+    if (outDir) { try { fs.rmSync(outDir, { recursive: true, force: true }); } catch (_) {} }
     setStatus('就绪');
     return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
   } finally { if (p.jobKey) dlRelease(p.jobKey); }
@@ -10268,6 +10331,27 @@ function updateParserSelfTest() {
  * 公告「属于当前版本」：改完就往 version 与 APP_VERSION 相同的那条里加条目 ——
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
+  {
+    version: '1.3-snapshot4',
+    date: '2026-10-31',
+    tag: '1.3 快照版',
+    notice: '这一版新增一类下载：**世界**。下载页多了「世界」一栏，可以直接搜 CurseForge 上的现成存档（建筑、跑酷、空岛、冒险地图），点「安装世界」就装进游戏目录的 saves，进游戏「单人游戏」就能打开。世界只走 CurseForge（Modrinth 没有这个类目），同名世界自动加序号，不会覆盖你已有的存档；解压是边下边解，几百 MB 的世界也不占内存。',
+    groups: [
+      {
+        icon: 'i-globe',
+        title: '新增 · 下载世界（存档）',
+        items: [
+          '**下载页多了「世界」一栏**：搜索 CurseForge 上的现成世界存档 —— 建筑作品、跑酷地图、空岛生存、冒险解谜都在这一类。列表里能看到下载量、作者和简介，跟 MOD / 资源包一样的卡片',
+          '**一键装进 saves**：点「安装世界」下载完自动解压到游戏目录的 `saves/<世界名>`，进游戏点「单人游戏」就能看到它，不用自己找文件夹解压',
+          '**不会覆盖你已有的存档**：saves 里已经有同名目录时，新世界自动叫「名字 (2)」「名字 (3)」，原来那个一动不动',
+          '**装之前先验货**：压缩包里必须有 `level.dat`（存档的标志文件）才装；`.rar` / `.7z` 这类启动器解不开的格式会提前说明，不会白下载几百 MB 才报错',
+          '**边下边解，不占内存**：解压走流式（读一段写一段），不像以前那样把整个包读进内存 —— 几百 MB 的世界也不会把启动器撑爆',
+          '**失败了不留垃圾**：解压到一半出错（压缩包损坏 / 磁盘满）会把这次的半个目录删掉，存档列表里不会多出一个打不开的世界',
+          '默认装最新文件；想装别的版本，点标题进详情页，在文件列表里挑一个装'
+        ]
+      }
+    ]
+  },
   {
     version: '1.3-snapshot3',
     date: '2026-10-31',

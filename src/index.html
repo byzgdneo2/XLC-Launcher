@@ -243,6 +243,7 @@
           <button class="tab" data-cat="resourcepack">资源包</button>
           <button class="tab" data-cat="shader">光影</button>
           <button class="tab" data-cat="datapack">数据包</button>
+          <button class="tab" data-cat="world">世界</button>
         </div>
         <div class="ver-list" id="verList"><div class="empty-sm">加载版本清单中…</div></div>
         <div id="resArea" style="display:none">
@@ -297,6 +298,17 @@
           </div>
           <div class="ver-list" id="dpList"><div class="empty-sm">加载中…</div></div>
           <div class="pager" id="dpPager"></div>
+        </div>
+        <div id="wdArea" style="display:none">
+          <div class="dl-res-head">
+            <div class="searchbox">
+              <svg class="ic sm"><use href="#i-search"/></svg>
+              <input type="text" id="wdSearch" placeholder="搜索世界 / 存档（支持中文）…">
+            </div>
+          </div>
+          <div class="res-note">来源 <b>CurseForge</b> · 世界会装进游戏目录的 <b>saves</b>（所有实例共用，进游戏「单人游戏」就能打开），同名世界自动加序号，不会覆盖已有存档</div>
+          <div class="ver-list" id="wdList"><div class="empty-sm">加载中…</div></div>
+          <div class="pager" id="wdPager"></div>
         </div>
         <div id="spArea" style="display:none">
           <div class="dl-res-head">
