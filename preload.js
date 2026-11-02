@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('lmc', {
   modrinthInstallPack: (p) => ipcRenderer.invoke('modrinth:install-pack', p),
   /* 世界（存档）下载：CurseForge 源，装进 gameDir/saves/<名字> */
   worldInstall: (p) => ipcRenderer.invoke('world:install', p),
+  worldTargetDir: (p) => ipcRenderer.invoke('world:target-dir', p),
   /* 内容下载（MOD/整合包/资源包/光影/数据包/世界）的「停止」：凭渲染层生成的 jobKey 打断任务 */
   downloadCancel: (jobKey) => ipcRenderer.invoke('download:cancel', jobKey),
   /* 冒烟专用：主进程只在 LMC_SMOKE_DL=1 时注册，平时调会报无处理器 */

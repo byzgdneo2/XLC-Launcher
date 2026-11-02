@@ -305,8 +305,13 @@
               <svg class="ic sm"><use href="#i-search"/></svg>
               <input type="text" id="wdSearch" placeholder="搜索世界 / 存档（支持中文）…">
             </div>
+            <label class="field">
+              <span>目标版本（装到该实例能读到的存档目录；选「全部」则放进游戏共享的 saves）</span>
+              <select id="wdTarget"></select>
+            </label>
           </div>
-          <div class="res-note">来源 <b>CurseForge</b> · 世界会装进游戏目录的 <b>saves</b>（所有实例共用，进游戏「单人游戏」就能打开），同名世界自动加序号，不会覆盖已有存档</div>
+          <div class="res-note">来源 <b>CurseForge</b> · 世界会装进上面选定的 <b>saves</b>：选了隔离实例就装进该实例（<b>versions/&lt;实例&gt;/saves</b>，用这个实例启动才看得到），选「全部」则所有实例共用。同名世界自动加序号，不会覆盖已有存档</div>
+          <div id="wdHint" class="warnbar tip res-note" style="display:none"></div>
           <div class="ver-list" id="wdList"><div class="empty-sm">加载中…</div></div>
           <div class="pager" id="wdPager"></div>
         </div>

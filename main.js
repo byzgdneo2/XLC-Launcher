@@ -144,6 +144,7 @@ try {
    → 1.3-snapshot2（审计 F1~F8：配置原子写 + 坏文件备份、退出时等在跑的自动备份、启动提示按登录方式、启动前命令防注入、开服模组同步判定、删除 MOD 进回收站、反馈页翻页、清单截断提示）
    → 1.3-snapshot3（综合源跨源去重：Modrinth 与 CurseForge 都收录的同一个 MOD 只显示一条，保留原本排在前面的那条；侧边栏「新功能投票」；安装 MOD 先选模组版本并按 Fabric/Forge/NeoForge/Quilt 分类；+ 审计 N1~N5：翻译器「开始翻译」按钮死锁、存档预览路径校验、翻译器读文件异常兜底、7 处下载按钮 try/finally、许可页链接转义）
    → 1.3-snapshot4（新增「世界」下载：下载页新分栏，从 CurseForge 搜现成存档（classId 17），装进 gameDir/saves，同名自动加序号，流式解压 + 失败清理）
+   → 1.3-pre1（1.3 预发布：世界下载按实例落点 —— 隔离实例装进 versions/<实例>/saves、世界下载带进度与解压计数、默认皮肤文案按 UUID 分配规则改正、更新包 reveal/run 加路径白名单）
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -152,7 +153,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.3-snapshot4';
+const APP_VERSION = '1.3-pre1';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -502,11 +503,20 @@ function modsDirFor(instance) {
 /* 光影目录：版本隔离实例（实例目录下已有 mods/ 或 saves/）游戏实际读取的是
    versions/<实例>/shaderpacks；否则读游戏根目录的 shaderpacks。判定口径与启动时的
    版本隔离判定保持一致（见 launch 的 isolated 判断），避免装完游戏里看不到。 */
+function instanceIsolated(d) {
+  return !!d && (fs.existsSync(path.join(d, 'mods')) || fs.existsSync(path.join(d, 'saves')));
+}
+/* 存档目录：同一套隔离判定 —— 隔离实例读 versions/<实例>/saves，否则读游戏根的 saves。
+   世界下载 / 存档相关功能都走这里，别再各自拼 path.join(gameDir,'saves')
+   （审计 W1：装进全局 saves，隔离实例进游戏「单人游戏」里根本看不到）。 */
+function savesDirFor(instance) {
+  const d = safeInstanceDir(instance);
+  if (instanceIsolated(d)) return path.join(d, 'saves');
+  return path.join(config.gameDir, 'saves');
+}
 function shaderpacksDirFor(instance) {
   const d = safeInstanceDir(instance);
-  if (d && (fs.existsSync(path.join(d, 'mods')) || fs.existsSync(path.join(d, 'saves')))) {
-    return path.join(d, 'shaderpacks');
-  }
+  if (instanceIsolated(d)) return path.join(d, 'shaderpacks');
   return path.join(config.gameDir, 'shaderpacks');
 }
 function safeModsPath(name, instance) {
@@ -3683,8 +3693,11 @@ ipcMain.handle('modrinth:install-pack', async (_e, p) => {
  * 为什么不用 zipio / ZIPW.extractZipTo：那两套都是「整包读进内存」的写法
  * （readFileSync + inflateRawSync），存档动辄几百 MB，峰值内存要到 2~3 倍。
  * 解压实现放在 src/world-core.js（只把中央目录读进内存，数据段 fs 流 → zlib 流 → 落盘）。 */
-ipcMain.handle('world:install', async (_e, p) => {
+ipcMain.handle('world:install', async (e, p) => {
   const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
+  /* 进度：和 MOD / 整合包一样推 install:progress，界面上就是那个「下载任务」浮窗。
+     世界动辄几百 MB，以前回调是空函数，用户只能盯着「下载中…」猜是不是卡死了（审计 W2）。 */
+  const send = (d) => { try { e.sender.send('install:progress', d); } catch (_) {} };
   let outDir = '';
   try {
     netReset();
@@ -3700,23 +3713,54 @@ ipcMain.handle('world:install', async (_e, p) => {
       throw new Error('这个世界的文件是 ' + (path.extname(file.fileName) || '未知') +
         ' 格式，启动器只支持 .zip —— 可以先到网页下载再手动解压到 saves 目录');
     }
-    const savesBase = path.join(config.gameDir, 'saves');
+    /* 装到哪（审计 W1）：选了实例且该实例是隔离实例 → 该实例的 versions/<id>/saves；
+       否则（含不选实例）→ 游戏根的 saves，所有实例共用。
+       以前一律装全局，装过 MOD 的隔离实例进游戏「单人游戏」里根本看不到这个世界。 */
+    const inst = String(p.instance || '').trim();
+    if (inst && !safeInstanceDir(inst)) throw new Error('实例名无效: ' + inst);
+    const savesBase = savesDirFor(inst);
+    const toInstance = savesBase !== path.join(config.gameDir, 'saves');
     await fsp.mkdir(savesBase, { recursive: true });
     const wantName = WLD_CORE.sanitizeName(p.name || file.displayName || file.fileName.replace(/\.[^.]+$/, ''));
     const dirName = WLD_CORE.uniqueName(wantName, nm => fs.existsSync(path.join(savesBase, nm)));
     outDir = path.join(savesBase, dirName);
     const tmp = path.join(os.tmpdir(), 'xlc-world-' + process.pid + '-' + Date.now() + '.zip');
     setStatus('下载世界: ' + file.fileName, true);
+    phaseBegin('world', Number(file.fileSize) || 0);
+    send({ stage: 'world', percent: 1, text: '下载世界 ' + file.fileName });
     try {
-      await cfDownload(file, tmp, () => {}, dlsig);
+      await cfDownload(file, tmp, (pct, got, total) => {
+        /* 下载占 1~88%，解压占 90~99%：浮窗的百分比是「整个安装流程」的口径，
+           别让它在下完的瞬间从 100% 掉回 0%。pct 未知（-1）时只报已下字节。 */
+        const p100 = (typeof pct === 'number' && pct >= 0) ? pct
+          : (total ? Math.round(got / total * 100) : 0);
+        send({
+          stage: 'world',
+          percent: Math.min(88, 1 + Math.round(p100 * 0.87)),
+          current: got, total: total || 0,
+          text: '下载世界 ' + file.fileName + ' · ' + Math.round(p100) + '%'
+            + (total ? '（' + (got / 1048576).toFixed(1) + ' / ' + (total / 1048576).toFixed(1) + ' MB）' : '')
+        });
+      }, dlsig);
       const names = await WLD_CORE.listNames(tmp);
       const prefix = WLD_CORE.detectPrefix(names);
       if (prefix === null) throw new Error('这个压缩包里没有 level.dat，看起来不是 Minecraft 世界存档');
-      const n = await WLD_CORE.extractZipStream(tmp, outDir, prefix);
+      send({ stage: 'world-extract', percent: 90, text: '解压世界文件…' });
+      const n = await WLD_CORE.extractZipStream(tmp, outDir, prefix, (done, total) => {
+        send({
+          stage: 'world-extract',
+          percent: total ? 90 + Math.round(done / total * 9) : 95,
+          current: done, total,
+          text: '解压世界文件 ' + done + (total ? '/' + total : '')
+        });
+      });
       if (!n) throw new Error('压缩包里没有可解出的文件');
+      send({ stage: 'done', percent: 100, text: '世界已装好' });
       setStatus('就绪');
-      toast('世界已装好：' + dirName + '（存档页可见，进游戏点「单人游戏」就能打开）');
-      return { ok: true, dir: dirName, files: n };
+      toast('世界已装好：' + dirName + '（' + (toInstance
+        ? '已放进实例「' + inst + '」的存档目录，用这个实例启动就能在「单人游戏」里看到'
+        : '存档页可见，进游戏点「单人游戏」就能打开') + '）');
+      return { ok: true, dir: dirName, files: n, base: toInstance ? 'instance' : 'global', savesDir: savesBase };
     } finally {
       await fsp.unlink(tmp).catch(() => {});
     }
@@ -3726,6 +3770,14 @@ ipcMain.handle('world:install', async (_e, p) => {
     setStatus('就绪');
     return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
   } finally { if (p.jobKey) dlRelease(p.jobKey); }
+});
+/* 世界页的「装到哪」查询：界面按这个显示落点（隔离实例 → versions/<实例>/saves）。
+   只读、不建目录，纯给提示用。 */
+ipcMain.handle('world:target-dir', (_e, p) => {
+  const inst = String((p && p.instance) || '').trim();
+  if (inst && !safeInstanceDir(inst)) return { ok: false, error: '实例名无效' };
+  const dir = savesDirFor(inst);
+  return { ok: true, dir, isolated: dir !== path.join(config.gameDir, 'saves') };
 });
 /* 下载并安装 Modrinth 整合包（.mrpack） */
 async function installModrinthIndex(index, packBuf, displayName, dlsig) {
@@ -10332,6 +10384,53 @@ function updateParserSelfTest() {
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
   {
+    version: '1.3-pre1',
+    date: '2026-11-02',
+    tag: '1.3 预发布版',
+    notice: '这一版把上一版新加的「世界下载」补齐了：装世界前可以先选目标版本 —— 选了装过 MOD 的实例，世界就装进那个实例自己的存档目录，进游戏「单人游戏」里真的能看到（以前一律装进游戏共享的 saves，隔离实例里根本找不到它）；下载世界现在也有进度条、速度与剩余时间了，几百 MB 的存档不用再盯着「下载中…」猜。另外修了「默认皮肤（史蒂夫）」这个说法 —— 游戏其实是按 UUID 从 9 个默认角色里挑的，不一定是史蒂夫；顺手把更新包的「打开所在文件夹 / 运行」限制在启动器自己下载的包上。',
+    groups: [
+      {
+        icon: 'i-globe',
+        title: '修复 · 下载的世界在隔离实例里找不到',
+        items: [
+          '**先选装到哪个版本**：世界的下载页多了一栏「目标版本」—— 选了具体实例，世界就装进那个实例的存档目录（`versions/<实例>/saves`）；留在「全部」则装进游戏共享的 `saves`，所有实例都能看到',
+          '**为什么以前看不到**：装过 MOD 的实例基本都开了**版本隔离**，游戏读的是实例目录里的 `saves`，而世界以前一律装进游戏根目录 —— 存档页明明列出来了，用那个实例进游戏「单人游戏」里却是空的',
+          '**落点写在下面**：目标版本下方会实时显示「将装到 <完整路径>」，并说明这个实例是不是版本隔离、装了之后哪些实例能看到，不用猜',
+          '**没开隔离的实例不会被塞进实例目录**：那种实例游戏读的就是共享的 `saves`，所以世界仍会装到共享目录，否则同样看不到',
+          '同名世界自动加序号、绝不动你已有的存档；装完立刻刷新存档页，不需要重启'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '改进 · 世界下载有进度了',
+        items: [
+          '**进度条 + 速度 + 剩余时间**：和 MOD / 整合包下载是同一个「下载任务」浮窗，显示百分比、已下载 / 总大小、实时速度和预计剩余时间',
+          '**下载与解压分两段显示**：下完不会从 100% 掉回 0%，解压阶段会显示「解压世界文件 12/340」这样的计数',
+          '**几百 MB 的世界也能看出是不是卡住了**：以前进度回调是空的，界面只有一句「下载中…」，网络卡住时完全没法判断',
+          '下载过程中照样可以点「停止」，已经下了一半的临时文件会被清掉'
+        ]
+      },
+      {
+        icon: 'i-user',
+        title: '修复 · 「默认皮肤」不一定是史蒂夫',
+        items: [
+          '**文案改对了**：1.19.4 之后游戏是按 UUID 从 9 个默认角色里挑一个（宽臂 / 细臂两种模型），所以账户卡片现在写「默认皮肤（由游戏按 UUID 自动分配，不一定是史蒂夫）」',
+          '**模型选择不再假装生效**：还没有自定义皮肤时，账户设置里会明确提示「这个模型选择暂时不会改变游戏里的样子」—— 以前照样把「经典 / 苗条」显示成已生效，选了 Steve 却进了游戏发现不是他',
+          '移除皮肤的确认文案同步改掉了「将使用游戏默认皮肤（史蒂夫）」的说法'
+        ]
+      },
+      {
+        icon: 'i-lock',
+        title: '安全 · 更新包只认启动器自己下载的那个',
+        items: [
+          '「在文件夹中显示」和「运行安装包」这两条通道现在要求路径必须落在程序目录 / 数据目录 / 系统下载目录 / 临时目录里，而且必须是 `.exe`',
+          '以前它们接受任意路径，一旦界面被注入就能被当成「用系统打开任意文件」的跳板 —— 和「用默认程序打开」那条通道的白名单口径保持一致',
+          '正常更新、回退、以及「下载到系统下载目录」的回退路径都不受影响'
+        ]
+      }
+    ]
+  },
+  {
     version: '1.3-snapshot4',
     date: '2026-10-31',
     tag: '1.3 快照版',
@@ -11538,9 +11637,26 @@ ipcMain.handle('update:cancel', () => {
   try { UPDATE_JOB.ctrl.abort(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
 });
 /* 在文件管理器中定位下载好的更新包 */
+/* 更新包只可能落在「程序目录 / 数据目录 / 系统下载目录 / 临时目录」四处（见 update:download 的落点），
+   所以 reveal / run 收到的路径必须落在这几个根里、而且得是 .exe —— 与 shell:open 的根目录白名单同口径，
+   避免渲染层被注入后把这两条通道当成「用系统打开任意文件」的跳板（审计 D1，属纵深加固）。 */
+function updatePkgAllowed(p) {
+  const f = String(p || '');
+  if (!f || !/\.exe$/i.test(f)) return false;
+  const abs = path.resolve(f);
+  const roots = [exeBaseDir(), DATA_DIR, os.tmpdir()];
+  try { roots.push(app.getPath('downloads')); } catch (_) {}
+  return roots.some(r => {
+    try {
+      const rel = path.relative(path.resolve(r), abs);
+      return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+    } catch (_) { return false; }
+  });
+}
 ipcMain.handle('update:reveal', (_e, p) => {
   const f = String((p && p.path) || '');
   if (!f || !fs.existsSync(f)) return { ok: false, error: '文件不存在（可能已被移动或删除）' };
+  if (!updatePkgAllowed(f)) { logLine('[update] 已拒绝定位非更新包路径: ' + f); return { ok: false, error: '拒绝操作：该文件不是启动器下载的更新包' }; }
   shell.showItemInFolder(f);
   return { ok: true };
 });
@@ -11548,6 +11664,7 @@ ipcMain.handle('update:reveal', (_e, p) => {
 ipcMain.handle('update:run', async (_e, p) => {
   const f = String((p && p.path) || '');
   if (!f || !fs.existsSync(f)) return { ok: false, error: '安装包不存在（可能已被移动或删除）' };
+  if (!updatePkgAllowed(f)) { logLine('[update] 已拒绝运行非更新包路径: ' + f); return { ok: false, error: '拒绝操作：该文件不是启动器下载的更新包' }; }
   const err = await shell.openPath(f);
   if (err) return { ok: false, error: err };
   return { ok: true };

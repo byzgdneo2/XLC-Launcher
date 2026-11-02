@@ -131,15 +131,17 @@ async function listNames(zipPath) {
 
 /* 流式解压：prefix 为空表示解全部条目；否则只解该前缀下的，并剥掉前缀。
    zip-slip：规范化后必须仍落在 destDir 内，越界条目直接跳过。
-   不支持的压缩方法（bzip2 / 加密）跳过，不影响其它文件。 */
-async function extractZipStream(zipPath, destDir, prefix) {
+   不支持的压缩方法（bzip2 / 加密）跳过，不影响其它文件。
+   onProgress(done, total)：每解 10 个文件报一次（世界动辄上千个 region/poi 文件，
+   逐个上报会刷爆 IPC；总数按「前缀过滤后」的条目算，百分比才有意义）。 */
+async function extractZipStream(zipPath, destDir, prefix, onProgress) {
   const entries = await listEntries(zipPath);
+  const picked = prefix ? entries.filter(it => it.name.startsWith(prefix)) : entries;
   const rootAbs = path.resolve(destDir);
   const fh = await fsp.open(zipPath, 'r');
-  let n = 0;
+  let n = 0, seen = 0;
   try {
-    for (const it of entries) {
-      if (prefix && !it.name.startsWith(prefix)) continue;
+    for (const it of picked) {
       const rel = prefix ? it.name.slice(prefix.length) : it.name;
       if (!rel) continue;
       const dest = path.resolve(rootAbs, rel.replace(/\\/g, '/').split('/').join(path.sep));
@@ -149,13 +151,16 @@ async function extractZipStream(zipPath, destDir, prefix) {
       if (lh.readUInt32LE(0) !== 0x04034b50) continue;   /* 本地头签名不对，跳过 */
       const dataStart = it.lho + 30 + lh.readUInt16LE(26) + lh.readUInt16LE(28);
       await fsp.mkdir(path.dirname(dest), { recursive: true });
-      if (!it.csize) { await fsp.writeFile(dest, Buffer.alloc(0)); n++; continue; }
-      if (it.method !== 0 && it.method !== 8) continue;
-      const src = fs.createReadStream(zipPath, { start: dataStart, end: dataStart + it.csize - 1 });
-      const out = fs.createWriteStream(dest);
-      if (it.method === 0) await pipeline(src, out);
-      else await pipeline(src, zlib.createInflateRaw(), out);
-      n++;
+      if (!it.csize) { await fsp.writeFile(dest, Buffer.alloc(0)); n++; }
+      else if (it.method !== 0 && it.method !== 8) continue;
+      else {
+        const src = fs.createReadStream(zipPath, { start: dataStart, end: dataStart + it.csize - 1 });
+        const out = fs.createWriteStream(dest);
+        if (it.method === 0) await pipeline(src, out);
+        else await pipeline(src, zlib.createInflateRaw(), out);
+        n++;
+      }
+      if (onProgress && (n % 10 === 0 || n === picked.length)) onProgress(n, picked.length);
     }
   } finally { await fh.close(); }
   return n;

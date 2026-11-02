@@ -1064,6 +1064,31 @@ function updateShaderHint() {
   box.style.display = '';
 }
 $('#spTarget') && $('#spTarget').addEventListener('change', updateShaderHint);
+/* 世界页落点提示：把「到底装到哪个 saves」写清楚 —— 隔离实例读的是 versions/<实例>/saves，
+   装到全局的话进游戏「单人游戏」里根本看不到（审计 W1）。落点由主进程判定，界面只负责显示。 */
+let wdHintSeq = 0;
+async function updateWorldHint() {
+  const box = $('#wdHint'), sel = $('#wdTarget');
+  if (!box || !sel) return;
+  const v = sel.value;
+  const inst = (!v || v === '__all__') ? '' : v;
+  const seq = ++wdHintSeq;
+  let r = null;
+  try { r = await window.lmc.worldTargetDir({ instance: inst }); } catch (_) { r = null; }
+  if (seq !== wdHintSeq || sel.value !== v) return;      /* 期间又切了目标：丢掉这次的回包 */
+  if (!r || !r.ok) {
+    box.innerHTML = '目标实例无效，世界会装到游戏共享的 <b>saves</b>。';
+    box.style.display = '';
+    return;
+  }
+  box.innerHTML = r.isolated
+    ? '将装到实例 <b>' + esc(inst) + '</b> 的 <b>' + esc(r.dir) + '</b> —— 这个实例是<b>版本隔离</b>（装了 MOD 的实例基本都是），只在这个实例里看得到；用别的实例启动就看不到它。'
+    : (inst
+      ? '将装到 <b>' + esc(r.dir) + '</b> —— 实例 <b>' + esc(inst) + '</b> 没有做版本隔离，游戏读的就是这个共享目录，所有实例都能看到它。'
+      : '将装到 <b>' + esc(r.dir) + '</b>，所有实例共用。');
+  box.style.display = '';
+}
+$('#wdTarget') && $('#wdTarget').addEventListener('change', updateWorldHint);
 
 /* 资源页用的版本下拉（带加载器的版本排前）+ 数据包存档下拉 + 光影目标版本 */
 function refreshAuxSelects() {
@@ -1100,6 +1125,18 @@ function refreshAuxSelects() {
   if (prevD && S.installed.some(v => v.id === prevD)) dv.value = prevD;
   else if (S.config.defaultVersion && S.installed.some(v => v.id === S.config.defaultVersion)) dv.value = S.config.defaultVersion;
   else if (homeId && S.installed.some(v => v.id === homeId)) dv.value = homeId;
+  /* 世界目标版本：选具体实例 → 装进该实例的存档目录（隔离实例才生效），「全部」→ 游戏共享的 saves。
+     首次进入默认跟着主页选中的实例走 —— 玩家基本就是「装完立刻用这个实例开游戏」（审计 W1）。
+     ⚠️ 这段必须放在上面那条 if/else if 链**之后**：插在中间会把 else 抢走，
+        「默认启动实例」就再也回填不上了（游戏设置页会变成没选实例）。 */
+  const wd = $('#wdTarget');
+  if (wd) {
+    const prevWd = wd.value;
+    wd.innerHTML = '<option value="__all__">全部（游戏共享的 saves）</option>' + (opts(S.installed) || '');
+    if (prevWd && (prevWd === '__all__' || S.installed.some(v => v.id === prevWd))) wd.value = prevWd;
+    else wd.value = (homeId && S.installed.some(v => v.id === homeId)) ? homeId : '__all__';
+    updateWorldHint();
+  }
   // MOD 管理目标实例（支持版本隔离：选实例读 versions/<实例>/mods，全局读 mods/）
   const mt = $('#modTarget');
   const prevM = mt.value;
@@ -2773,14 +2810,19 @@ function setupResPage(cfg) {
           else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
           else toast('光影已装到 ' + (inst || '游戏根目录') + '：' + rr.file + '（游戏内用 Iris / OptiFine 选中即可生效）');
         } else if (cfg.type === 'world') {
-          /* 世界（存档）：只走 CurseForge，装到 gameDir/saves/<名字>；不跟随实例 */
+          /* 世界（存档）：只走 CurseForge。目标留在「全部」→ 游戏共享的 saves；
+             选了具体实例 → 导到该实例（隔离实例进 versions/<实例>/saves，游戏才读得到，审计 W1）。
+             进度由主进程推 install:progress，浮窗和 MOD 下载是同一个。 */
+          const rawW = cfg.targetSel ? $(cfg.targetSel).value : '';
+          const instW = (!rawW || rawW === '__all__') ? '' : rawW;
           const jkWd = 'world|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
           const rr = await dlGuarded(btn, jkWd, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装世界', () =>
-            window.lmc.worldInstall({ source: itemSrc(h), projectId: h.id, name: h.title, jobKey: jkWd }));
+            window.lmc.worldInstall({ source: itemSrc(h), projectId: h.id, name: h.title, jobKey: jkWd, instance: instW }));
+          dlTaskFinish(!!rr.ok, rr.error || '', !!rr.cancelled);
           if (rr.cancelled) toast('已取消下载', 'warn');
           else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
           else {
-            toast('世界已装好：' + rr.dir + '（存档页可见）');
+            toast('世界已装好：' + rr.dir + (rr.base === 'instance' ? '（已放进实例「' + instW + '」，用这个实例启动即可）' : '（游戏共享，所有实例都能看到）'));
             renderSavesPage(true).catch(() => {});
           }
         } else { // datapack
@@ -2830,7 +2872,7 @@ const rpPage = setupResPage({ type: 'resourcepack', search: '#rpSearch', list: '
 const spPage = setupResPage({ type: 'shader', search: '#spSearch', list: '#spList', pager: '#spPager', targetSel: '#spTarget', targetType: 'version' });
 const dpPage = setupResPage({ type: 'datapack', search: '#dpSearch', list: '#dpList', pager: '#dpPager', targetSel: '#dpWorld', targetType: 'world' });
 /* 世界（存档）只有 CurseForge 一个源 —— Modrinth 没有 world 项目类型，所以不给源切换按钮 */
-const wdPage = setupResPage({ type: 'world', search: '#wdSearch', list: '#wdList', pager: '#wdPager', source: 'curseforge' });
+const wdPage = setupResPage({ type: 'world', search: '#wdSearch', list: '#wdList', pager: '#wdPager', targetSel: '#wdTarget', targetType: 'version', source: 'curseforge' });
 /* 下载页资源类 tab → 区块/工厂实例映射 */
 const DL_RES_TABS = {
   mod: { area: 'resArea', page: () => modPage },
@@ -4651,7 +4693,7 @@ function renderAccounts(accounts, active) {
               : '购买状态未确认（可能是网络未通）') +
             (a.gamertag ? ' · Xbox 玩家代号 ' + esc(String(a.gamertag)) : '') + ' · 令牌自动续期'
           : a.type === 'authlib' ? '外置登录 · 皮肤/披风由认证服务器提供 · 启动时正版方式验证'
-          : (a.skin ? '自定义皮肤已设置（启动游戏自动生效）' : '默认皮肤（史蒂夫）')) + '</div>' +
+          : (a.skin ? '自定义皮肤已设置（启动游戏自动生效）' : '默认皮肤（由游戏按 UUID 自动分配，不一定是史蒂夫）')) + '</div>' +
       '</div>' +
       '<div class="v-act"></div>';
     const act = row.querySelector('.v-act');
@@ -4703,13 +4745,18 @@ function openAccountSettings(name) {
           '<button class="btn primary" id="accSetSkinPick">' + (a.skin ? '更换皮肤' : '上传皮肤') + '</button>' +
           '<button class="btn ghost" id="accSetSkinDel"' + (a.skin ? '' : ' disabled') + '>移除皮肤</button>' +
         '</div>';
+    /* 没有自定义皮肤时，「经典 / 苗条」对游戏内没有任何影响：1.19.4+ 的默认皮肤是游戏按
+       UUID 哈希从 DEFAULT_SKINS 里挑的（9 个角色 × 宽/细两种模型），启动器改不了。
+       以前这里照样把两个按钮显示成「已生效」，用户会以为选了 Steve 就真是 Steve（审计 W3）。 */
     const modelSec = online
       ? '<p class="hint">模型（经典 / 苗条）由服务器跟着皮肤一起下发，启动器不覆盖。</p>'
       : '<div class="btn-row">' +
           '<button class="btn ' + (slim ? 'ghost' : 'primary') + '" data-model="classic">经典（Steve · 4px 手臂）</button>' +
           '<button class="btn ' + (slim ? 'primary' : 'ghost') + '" data-model="slim">苗条（Alex · 3px 手臂）</button>' +
         '</div>' +
-        '<p class="hint">必须与皮肤文件匹配：宽手臂的皮肤配经典，细手臂的配苗条，选错了游戏里手臂会变形。</p>';
+        (!a.skin
+          ? '<p class="hint">⚠️ 现在还没有自定义皮肤：游戏用的是它自己按 UUID 分配的默认皮肤（从 9 个默认角色里挑宽臂 / 细臂），所以这个模型选择<b>暂时不会改变游戏里的样子</b>；上传皮肤之后才会按你选的模型生效。</p>'
+          : '<p class="hint">必须与皮肤文件匹配：宽手臂的皮肤配经典，细手臂的配苗条，选错了游戏里手臂会变形。</p>');
     const nameSec = online
       ? '<div class="field-line"><input value="' + esc(a.name) + '" disabled></div>' +
         '<p class="hint">在线账户的玩家名由认证服务器决定，不能在这里改。</p>'
@@ -4725,7 +4772,7 @@ function openAccountSettings(name) {
       '<div class="acc-set">' +
         '<div class="acc-set-side">' +
           '<canvas id="accSetSkin" width="160" height="320"></canvas>' +
-          '<div class="acc-set-cap">' + (a.skin ? '自定义皮肤' : '默认皮肤（史蒂夫）') + '</div>' +
+          '<div class="acc-set-cap">' + (a.skin ? '自定义皮肤' : '默认皮肤（游戏自动分配）') + '</div>' +
         '</div>' +
         '<div class="acc-set-body">' +
           '<div class="acc-set-sec"><div class="acc-set-h"><svg class="ic sm"><use href="#i-user-check"/></svg> 皮肤</div>' + skinSec + '</div>' +
@@ -4751,7 +4798,7 @@ function openAccountSettings(name) {
       paint();
     });
     on('#accSetSkinDel', 'click', async () => {
-      if (!(await askConfirm('移除皮肤', '确定移除「' + cur + '」的自定义皮肤吗？移除后将使用游戏默认皮肤（史蒂夫）。', '移除', true))) return;
+      if (!(await askConfirm('移除皮肤', '确定移除「' + cur + '」的自定义皮肤吗？移除后游戏会用它自己按 UUID 分配的默认皮肤（不一定是史蒂夫）。', '移除', true))) return;
       applyAccounts(await window.lmc.accountSkinRemove({ name: cur }), '已恢复默认皮肤');
       paint();
     });
