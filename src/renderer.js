@@ -4534,7 +4534,11 @@ async function applyAccounts(r, okMsg) {
 }
 /* 主页头像：从当前账户的离线皮肤 PNG 裁出头部（面部 8,8 + 帽子/头发行 40,8）按像素风放大绘制
  * 皮肤可能是 64x64（含独立帽子层）或 64x32（旧版，无独立层），无皮肤时画默认头像兜底 */
-/* 默认头像 = 标准 Minecraft 史蒂夫（官方皮肤配色，无自定义皮肤时使用）
+/* 默认皮肤 = 内置的标准史蒂夫 64x64 贴图（assets/skin-steve.png）。
+   和用户上传的皮肤走同一套 UV 裁切，头像 / 全身预览与游戏里看到的史蒂夫一致。
+   下面的手绘版本只作为「贴图文件缺失」时的兜底，正常不会画到。 */
+const DEFAULT_SKIN_URL = '../assets/skin-steve.png';
+/* 兜底：手绘标准史蒂夫头像（官方配色）
  * 8x8 网格：眼睛留白一格（史蒂夫是 2px 宽的白眼 + 2px 蓝瞳） */
 function drawSteveHead(ctx, u) {
   const S = {
@@ -4570,9 +4574,8 @@ function renderHeroHead(dataUrl) {
   const W = cv.width, H = cv.height, u = W / 8;   /* 面部按 8x8 像素网格缩放 */
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, W, H);
-  /* 没有自定义皮肤 → 画标准史蒂夫头像（不是抽象占位） */
-  const drawDefault = () => { ctx.clearRect(0, 0, W, H); drawSteveHead(ctx, u); };
-  if (!dataUrl) { drawDefault(); return; }
+  /* 没有自定义皮肤 → 用内置的标准史蒂夫贴图；贴图本身读不到才回退手绘，避免空白头像 */
+  const drawFallback = () => { ctx.clearRect(0, 0, W, H); drawSteveHead(ctx, u); };
   const img = new Image();
   img.onload = () => {
     const legacy = img.width === 64 && img.height === 32;   /* 旧版皮肤没有独立帽子层 */
@@ -4580,8 +4583,8 @@ function renderHeroHead(dataUrl) {
     ctx.drawImage(img, 8, 8, 8, 8, 0, 0, W, H);             /* 面部 */
     if (!legacy) ctx.drawImage(img, 40, 8, 8, 8, 0, 0, W, H); /* 帽子/头发层（透明处自然叠加） */
   };
-  img.onerror = drawDefault;
-  img.src = dataUrl;
+  img.onerror = drawFallback;
+  img.src = dataUrl || DEFAULT_SKIN_URL;
 }
 /* 按玩家名找账户皮肤并刷新主页头像；返回用到的皮肤 dataURL（无则 null） */
 function heroHeadFor(name) {
@@ -4613,8 +4616,10 @@ function paintSkinPreview(cv, dataUrl) {
   const ctx = cv.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, cv.width, cv.height);
-  if (!dataUrl) {
-    /* 默认史蒂夫全身（经典 4px 手臂配色），未上传皮肤时展示标准形象 */
+  const img = new Image();
+  /* 贴图缺失时的兜底：手绘史蒂夫全身（经典 4px 手臂配色） */
+  const paintFallback = () => {
+    ctx.clearRect(0, 0, cv.width, cv.height);
     const px = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };
     const SKIN = '#b5836c', SKIN2 = '#9c6f58', HAIR = '#1f1409', EYEW = '#ffffff', IRIS = '#3b2c8f';
     const SHIRT = '#00afaf', SHIRT2 = '#00a0a0';     /* 史蒂夫青色上衣 */
@@ -4635,9 +4640,8 @@ function paintSkinPreview(cv, dataUrl) {
     px(40, 204, 40, 116, PANTS); px(80, 204, 40, 116, PANTS);
     px(40, 310, 40, 10, SHOE); px(80, 310, 40, 10, SHOE);
     px(40, 204, 40, 8, PANTS2); px(80, 204, 40, 8, PANTS2);
-    return;
-  }
-  const img = new Image();
+  };
+  img.onerror = paintFallback;
   img.onload = () => {
     const w = img.width, legacy = w === 64 && img.height === 32;
     const draw = (sx, sy, sw, sh, dx, dy, dw, dh) => ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
@@ -4651,7 +4655,7 @@ function paintSkinPreview(cv, dataUrl) {
     if (!legacy) draw(20, 52, 4, 12, 80, 200, 40, 120); /* 左腿 */
     else draw(4, 16, 4, 12, 80, 200, 40, 120);
   };
-  img.src = dataUrl;
+  img.src = dataUrl || DEFAULT_SKIN_URL;
 }
 function renderAccounts(accounts, active) {
   const box = $('#accList');
