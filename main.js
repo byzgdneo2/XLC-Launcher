@@ -147,6 +147,7 @@ try {
    → 1.3-pre1（1.3 预发布：世界下载按实例落点 —— 隔离实例装进 versions/<实例>/saves、世界下载带进度与解压计数、默认皮肤文案按 UUID 分配规则改正、更新包 reveal/run 加路径白名单）
    → **1.3（正式版：1.3 全部快照内容合并转正 —— 世界下载（含按实例落点）、存档备份 / 模组清单对齐两个内置插件、装 MOD 先选模组版本、下载可停止与进度、反馈页与新功能投票、配置原子写 / 实例搬家 / 回收站等稳定性修复、存档预览与启动前命令等安全加固）**
    → **1.3.1（紧急修复：默认皮肤改用内置标准史蒂夫 64×64 贴图，主页头像与账户页预览不再手绘色块）**
+   → **1.4-snapshot1（功能开关搬进设置项 features.downloadGame / modpack，外置插件凭 control 权限就能把下架的下载页放回来；配合「下载恢复器」2.0.0 插件）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -155,7 +156,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4-snapshot1';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -244,6 +245,12 @@ const DEFAULT_CONFIG = {
   aiApi: { base: '', key: '', model: 'gpt-4o-mini' },
   /* 插件启用状态：{ seedmap:true, server:true }（键缺省 = 启用） */
   plugins: {},
+  /* 功能开关（原「临时下架」）：false = 下架（默认），true = 打开。
+     downloadGame：下载页的 正式版 / 快照版 / 远古版本 / 全部 四个分类（游戏版本下载入口）
+     modpack    ：下载页「整合包」分类 + 「导入整合包」按钮
+     为什么放进配置：外置插件碰不到主界面的 DOM，但凭 control 权限可以改设置 —— 「下载恢复器」
+     这类插件就是靠把 downloadGame 置 true 让内置下载页回来的（渲染层监听 plugin:cfg-changed 立刻重画）。 */
+  features: { downloadGame: false, modpack: false },
   /* 内置插件「存档备份」的设置。
      auto 默认 **关** —— 自动备份会实实在在占盘，不能替用户默认打开；
      打开后两个时机都备（启动前 / 游戏退出后），dir 为空 = 数据目录下的「存档备份」。
@@ -6808,6 +6815,16 @@ const PLUGIN_CFG_NEVER = new Map([
 /* 设置项规格表。type 决定怎么校验；writable:false / only 决定「不许改」，
    并在 config.schema 里如实告诉作者为什么 —— 让作者一眼看到边界，比让他试错强。 */
 const PLUGIN_CFG_SPEC = {
+  /* ---- 功能开关（原本下架、由插件恢复的功能）----
+     默认 false（下架）。这是外置插件唯一能「改到界面」的合法着力点：
+     改它不会藏功能、不会改凭据，只是把启动器自己就有的下载页放出来。 */
+  features: {
+    group: '功能', label: '功能开关', type: 'obj',
+    fields: {
+      downloadGame: { type: 'bool', label: '下载游戏（正式版 / 快照版 / 远古版本 / 全部）' },
+      modpack: { type: 'bool', label: '整合包下载与导入' }
+    }
+  },
   /* ---- 下载 ---- */
   source: { group: '下载', label: '下载源', type: 'enum', values: ['bmclapi', 'official', 'custom'] },
   customSource: { group: '下载', label: '自定义下载源地址', type: 'str', max: 300 },
@@ -8024,6 +8041,16 @@ async function pluginSelfTest() {
     'mem=' + config.mem);
   const implied = pluginApiCall(TID, 'versions.list', {});
   ok(implied.ok && Array.isArray(implied.data), 'C47 有 control 就等于也能读实例列表（改完能自己确认）', implied.ok ? 'n=' + implied.data.length : implied.error);
+  /* 功能开关：外置插件「恢复下载页」的唯一正路（改 features，界面重画灰度） */
+  const featPushBefore = PLUGIN_CFG_PUSH.length;
+  const featOn = pluginApiCall(TID, 'config.set', { key: 'features.downloadGame', value: true });
+  ok(featOn.ok && !!(config.features && config.features.downloadGame === true),
+    'C47b 插件能打开「下载游戏」开关（下载恢复器的正路）', JSON.stringify(featOn.changed || featOn.error));
+  ok(PLUGIN_CFG_PUSH.length > featPushBefore, 'C47c 改完给界面推了 plugin:cfg-changed（渲染层据此重画下载页）',
+    featPushBefore + ' -> ' + PLUGIN_CFG_PUSH.length);
+  const featOff = pluginApiCall(TID, 'config.set', { key: 'features', value: { downloadGame: false, modpack: false } });
+  ok(featOff.ok && config.features.downloadGame === false && config.features.modpack === false,
+    'C47d 能整项写回（插件里的「还原成下架」）', JSON.stringify(featOff.changed || featOff.error));
   /* 还原自测动过的配置项 */
   config.mem = cfgBackup.mem;
   config.gameArgs = cfgBackup.gameArgs;
@@ -10385,6 +10412,44 @@ function updateParserSelfTest() {
  * 公告「属于当前版本」：改完就往 version 与 APP_VERSION 相同的那条里加条目 ——
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
+  {
+    version: '1.4-snapshot1',
+    date: '2026-11-04',
+    tag: '快照版',
+    notice: '1.4 首个快照：把「下载游戏 / 整合包」的开关从代码常量搬进设置项（features），外置插件凭「读取并修改设置」权限就能把下架的下载页放回来 —— 从此不用改启动器本体，一个插件包就能恢复被下架的功能。随包附带「下载恢复器」2.0.0。',
+    groups: [
+      {
+        icon: 'i-puzzle',
+        title: '新增 · 功能开关交给插件',
+        items: [
+          '**「下载游戏 / 整合包」的开关搬进设置项**：新增 `features.downloadGame` / `features.modpack`，默认 `false`（与之前一样是下架状态）；置 `true` 后下载页的**正式版 / 快照版 / 远古版本 / 全部**四个分类与**整合包**分类立刻可点，「导入整合包」按钮一并恢复',
+          '**插件改完界面立刻重画，不用重启**：渲染层监听 `plugin:cfg-changed`，重新计算灰度并迁移当前分类（从被禁的分类迁到第一个可用项，走的是正常点击路径，标题 / 内容区 / 懒加载一次到位）',
+          '**恢复出来的就是内置那个下载页**：版本清单双源（BMCLAPI / 官方）、加载器选择（Vanilla / Fabric / Quilt / Forge / NeoForge）、多线程下载、进度与「停止安装」全部沿用 —— 插件只负责拨开关，不重写下载流程',
+          '**插件接口文档补一节**：`docs/plugin-api.md` 新增「功能开关」，写明 `config.get / set` 的用法与这条通道的边界（只能放出来，不能藏起来）',
+          '**红线照旧**：插件开关（`plugins`）、已读公告版本、更新提示、账户凭据仍然一律不让改 —— 这次开放的是「把功能放回来」，不是「让插件动启动器的功能清单」'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '插件 · 下载恢复器 2.0.0',
+        items: [
+          '面板直接显示两项功能的当前状态（已恢复 / 已下架），不必去设置页翻',
+          '「恢复下载页」与「还原成下架」各一个按钮，改完回启动器看下载页就已经生效',
+          '只申请 `control`（改这两项设置）与 `notify`（改完弹一句提示）两项权限，不写游戏目录、不碰账户与更新设置',
+          '插件包：`dist/XLC-Plugin-download-rescue-2.0.0.zip`（导入时记得勾选「读取并修改启动器的设置」）'
+        ]
+      },
+      {
+        icon: 'i-check',
+        title: '修复 · 恢复后默认分类',
+        items: [
+          '**插件恢复下载页后，下载页默认还停在 MOD**：下架期间「默认分类被禁 → 自动迁到第一个可用 tab」，这个被迫迁移的状态在恢复后没被撤回，于是点进下载页看到的仍是 MOD。现在会记住「被迫迁到哪」，功能一恢复就自动切回默认的「全部」（版本列表、标题、dlCat 一起回来）',
+          '**只在「被迫迁移」时回退**：用户自己点过别的分类就不再抢，避免每次配置变动都把界面拽回首页',
+          '`qa/off-ui.js` 补断言：恢复后自动回「全部」、标题 / 列表 / 资源区同步、用户自选分类不被抢、再关回去仍正确迁走（43 项全绿）'
+        ]
+      }
+    ]
+  },
   {
     version: '1.3.1',
     date: '2026-11-03',

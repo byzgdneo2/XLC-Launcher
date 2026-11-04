@@ -12,12 +12,12 @@ const el = (tag, cls, html) => {
 };
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
-/* ---------------- 功能临时下架开关（只禁不删） ----------------
- * 需要「临时下架」某功能时把对应值改成 true；恢复时改回 false 即可，功能代码一行没动。
- *   downloadGame：下载页的 4 个游戏分类 tab（正式版 / 快照版 / 远古版本 / 全部）——游戏版本下载入口
+/* ---------------- 功能开关（原「临时下架」，只禁不删） ----------------
+ * 由设置项 features.downloadGame / features.modpack 控制，默认关闭（= 下架）。
+ *   downloadGame：下载页的 4 个游戏分类 tab（正式版 / 快照版 / 远古版本 / 全部）
  *   modpack    ：下载页「整合包」tab + 「导入 / 整合包」页的「导入整合包」按钮
- * 不受影响：联机 / MOD / 资源包 / 光影 / 数据包 / 导入目录 / 导入插件 / 导出整合包。 */
-const FEATURE_OFF = { downloadGame: true, modpack: true };
+ * 真正的实现在「下载页」段的 applyFeatureOff()（那里才拿得到 tab 与 dlCat）。
+ * 外置插件凭 control 权限把这两项打开即可恢复，见 docs/plugin-api.md。 */
 
 /* ---------------- 全局状态 ---------------- */
 const S = {
@@ -99,6 +99,8 @@ window.lmc.on('plugin:cfg-changed', async (d) => {
   try {
     await loadConfigUI();
     applyPersonalize();
+    /* 插件改了功能开关（features.downloadGame / modpack）→ 立刻重画下载页灰度，不用重启 */
+    applyFeatureOff(true);
     /* 换游戏目录 / 换默认实例会改变「本机有哪些版本」，重扫一遍免得主页与实例页还是旧的 */
     if (keys.some(k => /^(gameDir|defaultVersion|lastVersion)/.test(k))) await scanDir();
   } catch (e) {
@@ -1515,18 +1517,62 @@ $('#creditSsb').addEventListener('click', () => {
 $('#btnOpenDir').addEventListener('click', () => window.lmc.openPath(S.config.gameDir));
 
 /* ---------------- 下载页 ---------------- */
-/* 功能临时下架（FEATURE_OFF）：给被禁的分类 tab 打上 .tab-off 置灰。
-   这里**只做标记、不动 active** —— active 的迁移放在下方 tab 点击 handler 绑定完成之后，
-   用程序化 click() 走正常切换路径（内容区 / 标题 / dlCat / 懒加载全部一致），不会两处写断。
-   游戏分类列表在这里手写（TYPE_GROUPS 定义在 dlCat 之后，提前引用会 TDZ 崩溃）。 */
+/* 功能开关（原「临时下架」，只禁不删）：默认全部下架，打开 = 设置项 features.* 为 true。
+   为什么改成读配置：外置插件拿不到主界面 DOM，但凭 control 权限可以改设置 —— 于是「插件恢复
+   下载页」= 插件把 features.downloadGame 打开，主进程推 plugin:cfg-changed，这里重画灰度，
+   用的仍是**内置那套下载页**（列表 / 加载器 / 多线程 / 进度一条不少），不用插件重写一遍。
+   这里**只做标记**，active 的迁移交给 allowMigrate（启动后期才允许：early 调用时 dlCat 还没初始化，
+   程序化 click() 会 TDZ 崩溃）。游戏分类列表在这里手写（TYPE_GROUPS 定义在 dlCat 之后）。 */
 const OFF_GAME_CATS = ['release', 'snapshot', 'old', 'all'];
-$$('#dlTabs .tab').forEach(t => {
-  const c = t.dataset.cat;
-  const off = (FEATURE_OFF.downloadGame && OFF_GAME_CATS.includes(c)) || (FEATURE_OFF.modpack && c === 'modpack');
-  if (!off) return;
-  t.classList.add('tab-off');
-  t.title = '该功能暂时下架';
-});
+const FEATURE_OFF = { downloadGame: true, modpack: true };
+/* 与 index.html 里标 active 的那个 tab 一致（「全部」）：功能恢复后要回到这里 */
+const DL_DEFAULT_CAT = 'all';
+/* 下架期间被迫从默认分类迁走的目标（如 MOD）。用户自己点过 tab 就清空 —— 恢复时只回退
+   这一次「被迫」的迁移，不抢用户主动选中的分类。 */
+let dlAutoMigratedCat = null;
+let dlAutoClick = false;
+function applyFeatureOff(allowMigrate) {
+  const f = (S.config && S.config.features) || {};
+  FEATURE_OFF.downloadGame = f.downloadGame !== true;
+  FEATURE_OFF.modpack = f.modpack !== true;
+  $$('#dlTabs .tab').forEach(t => {
+    const c = t.dataset.cat;
+    const off = (FEATURE_OFF.downloadGame && OFF_GAME_CATS.includes(c)) || (FEATURE_OFF.modpack && c === 'modpack');
+    t.classList.toggle('tab-off', off);
+    t.title = off ? '该功能暂时下架' : '';
+  });
+  const imp = $('#btnImportModpack');
+  if (imp) { imp.disabled = !!FEATURE_OFF.modpack; imp.title = FEATURE_OFF.modpack ? '该功能暂时下架' : ''; }
+  if (!allowMigrate) return;
+  /* 先处理「恢复」：还停在被迫迁去的那个 tab 上、而默认分类已经可用 → 切回默认分类。
+     否则插件一恢复下载页，用户点进去看到的还是 MOD，容易以为没生效。 */
+  if (dlAutoMigratedCat) {
+    const cur = (($('#dlTabs .tab.active') || {}).dataset || {}).cat;
+    const back = Array.from($$('#dlTabs .tab')).find(x => x.dataset.cat === DL_DEFAULT_CAT);
+    if (cur !== dlAutoMigratedCat) {
+      dlAutoMigratedCat = null;          /* 用户自己点走了别的 tab，别抢回来 */
+    } else if (back && !back.classList.contains('tab-off')) {
+      dlAutoClick = true;
+      back.click();                       /* 走正常 click：内容区 / 标题 / dlCat 一次到位 */
+      dlAutoClick = false;
+      dlAutoMigratedCat = null;
+      return;
+    }
+  }
+  const act = $('#dlTabs .tab.active');
+  if (act && act.classList.contains('tab-off')) {
+    const first = $('#dlTabs .tab:not(.tab-off)');
+    if (first) {
+      dlAutoClick = true;
+      first.click();                      /* 走正常 click 路径：内容区 / 标题 / dlCat 一次到位 */
+      dlAutoClick = false;
+      dlAutoMigratedCat = first.dataset.cat;
+    }
+  } else if (act) {
+    moveTabInd($('#dlTabs'));            /* 没迁移时只需重新定位指示条 */
+  }
+}
+applyFeatureOff();
 /* 下载页当前分类：**读 DOM 的初始 active**（HTML 里默认标的是哪一个，这里就是哪一个）。
    写死成 'release' 会出现「HTML 标 active 的明明是「全部」、JS 却按正式版筛」的两处打架。 */
 let dlCat = (($$('#dlTabs .tab.active')[0] || {}).dataset || {}).cat || 'release';
@@ -1574,6 +1620,9 @@ function updateDlHead(cat) {
 }
 $$('#dlTabs .tab').forEach(t => t.addEventListener('click', () => {
   if (t.classList.contains('tab-off')) { toast('该功能暂时下架，敬请期待', 'warn'); return; }
+  /* 用户自己点的 tab：清掉「被迫迁移」记录，恢复功能时不再把界面拉回默认分类。
+     程序化迁移的 click 由 dlAutoClick 标记，不能清。 */
+  if (!dlAutoClick) dlAutoMigratedCat = null;
   $$('#dlTabs .tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active');
   moveTabInd($('#dlTabs'));
@@ -2899,12 +2948,9 @@ function dispTitle(zh, en) {
  * 导出的目标不用挑 —— 就是「基础设置 → 默认启动实例」那个游戏（PCL 式）。
  * 导入页原来那张「选版本 + 一键导出」的卡片已删除 —— 与这里重复，
  * 而且那边不能勾选打包内容（要连存档一起导、或只想导配置，只有弹窗支持）。 */
-/* 功能临时下架：导入整合包按钮置灰（disabled；恢复时 FEATURE_OFF.modpack 改回 false 即复原） */
-if (FEATURE_OFF.modpack) {
-  const b = $('#btnImportModpack');
-  if (b) { b.disabled = true; b.title = '该功能暂时下架'; }
-}
+/* 导入整合包按钮的置灰在 applyFeatureOff() 里统一处理（配置一改就重画，不在这里写死一次） */
 $('#btnImportModpack').addEventListener('click', async () => {
+  if (FEATURE_OFF.modpack) { toast('该功能暂时下架，敬请期待', 'warn'); return; }
   const r = await window.lmc.importModpack();
   dlTaskFinish(!!r.ok, r.error || '');
   if (r.canceled) return;
@@ -8400,18 +8446,10 @@ function bootDone() {
   renderPlugins(true).catch(() => {});
   // MOD / 整合包区在下载页 tab 内懒加载：首次切换到对应 tab 自动拉热门（PCL 式进页有内容）
   moveRailInd(); // 初始定位侧边栏滑动指示条（主页默认 active）
-  /* 功能临时下架（FEATURE_OFF）的 active 迁移：默认 active 的 tab 被禁时（HTML 里标的是「全部」），
-     程序化点击第一个可用 tab —— 走正常 click 路径，内容区 / 标题 / dlCat / 懒加载一次到位。
-     必须放在这里（全部 const 定义就绪）而不是脚本前段：click handler 引用 DL_RES_TABS，提前跑会 TDZ。 */
-  {
-    const act0 = $('#dlTabs .tab.active');
-    if (act0 && act0.classList.contains('tab-off')) {
-      const first = $('#dlTabs .tab:not(.tab-off)');
-      if (first) first.click();
-    } else {
-      moveTabInd($('#dlTabs')); // 未迁移时才需要初始定位（click 路径内会自己定位）
-    }
-  }
+  /* 配置已读到，重画功能开关（插件可能已经打开过 features.downloadGame）——
+     默认 active 的 tab 被禁时由 applyFeatureOff 内部程序化点击第一个可用 tab。
+     必须放在这里：click handler 引用 DL_RES_TABS，脚本前段跑会 TDZ。 */
+  applyFeatureOff(true);
   updateDlHead(dlCat);      // 标题与初始分类保持一致（迁移 click 已把 dlCat 切到可用分类）
   bootStep(100, '已就绪');
   /* 界面可交互后再撤遮罩：等两帧让首屏绘制完成，避免露出半成品画面 */
