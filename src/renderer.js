@@ -1534,7 +1534,9 @@ let dlAutoClick = false;
 function applyFeatureOff(allowMigrate) {
   const f = (S.config && S.config.features) || {};
   FEATURE_OFF.downloadGame = f.downloadGame !== true;
-  FEATURE_OFF.modpack = f.modpack !== true;
+  /* 整合包默认开：只有被**显式**关掉（features.modpack === false）才置灰。
+     1.4-snapshot2 起「下架」只针对下载游戏那几个分类，插件也只需要管 downloadGame。 */
+  FEATURE_OFF.modpack = f.modpack === false;
   $$('#dlTabs .tab').forEach(t => {
     const c = t.dataset.cat;
     const off = (FEATURE_OFF.downloadGame && OFF_GAME_CATS.includes(c)) || (FEATURE_OFF.modpack && c === 'modpack');
@@ -2431,10 +2433,15 @@ $('#btnSaveSettings').addEventListener('click', async () => {
     dlConcurrency: Math.min(Math.max(parseInt($('#setDlConcurrency').value, 10) || 32, 4), 64)
   });
   $('#inpName').value = S.config.username;
+  $('#setUsername').value = S.config.username;   /* 被主进程拒绝时这里回填原值，输入框不会留着非法名 */
   $('#heroName').textContent = S.config.username;
   heroHeadFor(S.config.username);
   updateStatusBarRight();
-  toast('设置已保存');
+  if (S.config && S.config.usernameRejected) {
+    toast('玩家名只支持 2-16 位字母、数字或下划线 —— 游戏不支持中文名，已保留原玩家名「' + S.config.username + '」', 'warn');
+  } else {
+    toast('设置已保存');
+  }
   await scanDir();
 });
 /* 版本更新：检测 / 打开下载页 / 自动检测开关（更新源已锁定，设置页只读展示） */
@@ -3364,6 +3371,45 @@ $('#btnVsUninstall').addEventListener('click', async () => {
   if (!r.ok) { toast('卸载失败: ' + r.error, 'error'); await loadLoaderCard(); return; }
   await scanDir();
   await loadLoaderCard();
+});
+
+/* ---------------- 补全文件（对齐 PCL「版本设置 → 补全文件」） ----------------
+   只核对「启动必需」的文件并按需补下载；判定是「在不在 + 大小对不对」，几秒扫完一个实例。
+   不动 MOD / 存档 / 配置 —— 与 PCL 一致，这个按钮只用来修「文件缺了起不来」。 */
+let repairing = false;
+window.lmc.on('repair:progress', (d) => {
+  if (!repairing || !d) return;
+  const box = $('#repairStatus');
+  if (!box) return;
+  box.textContent = (d.text || '正在补全…') + (d.percent ? '（' + d.percent + '%）' : '');
+});
+$('#btnRepairFiles').addEventListener('click', async () => {
+  const id = $('#gsDefaultVer').value;
+  if (!id) { toast('先在上面选一个「默认启动实例」', 'warn'); return; }
+  const okGo = await askConfirm('检查并补全实例「' + id + '」缺失的游戏文件？', {
+    detail: '只下载缺失或大小不对的文件（客户端 jar / 依赖库 / 资源文件 / natives / 加载器本体）；MOD、存档、设置都不会被改动。'
+  });
+  if (!okGo) return;
+  const btn = $('#btnRepairFiles');
+  const box = $('#repairStatus');
+  btn.disabled = true;
+  repairing = true;
+  box.textContent = '正在核对文件…';
+  try {
+    const r = await window.lmc.instanceRepair({ versionId: id });
+    if (!r || !r.ok) {
+      box.innerHTML = '<span style="color:#f87171">补全失败：' + esc((r && r.error) || '未知错误') + '</span>';
+      return;
+    }
+    box.innerHTML = '核对 <b>' + r.checked + '</b> 个文件 · 缺 <b>' + r.missing + '</b> · 补下 <b>' + r.downloaded + '</b>' +
+      (r.failed ? ' · <span style="color:#f59e0b">失败 ' + r.failed + ' 个（可再点一次重试）</span>' : ' · 全部就绪') +
+      (r.patchedLoader ? ' · 已把加载器补记进版本 json' : '');
+  } catch (e) {
+    box.innerHTML = '<span style="color:#f87171">补全失败：' + esc(String((e && e.message) || e)) + '</span>';
+  } finally {
+    repairing = false;
+    btn.disabled = false;
+  }
 });
 
 /* ---------------- 「修改」页（对齐 PCL「版本设置 → 修改」子页） ----------------
@@ -4705,7 +4751,12 @@ function paintSkinPreview(cv, dataUrl) {
 }
 function renderAccounts(accounts, active) {
   const box = $('#accList');
-  const list = accounts || [];
+  /* 防御：IPC 失败时 accounts 可能是 undefined（例如 account:add 被规则拒绝，返回里没有 accounts）。
+     以前这里写 `accounts || []`，等于把失败当成「一个账户都没有」，整个列表被清成空状态 ——
+     用户改名 / 添加被拒时看到的就是「账户全都消失了」（数据其实还在，重进账户页就回来）。
+     没有数组就原样不动，绝不拿失败结果覆盖已有列表。 */
+  if (!Array.isArray(accounts)) return;
+  const list = accounts;
   S.accounts = list;   /* 主页头像按名字取皮肤用（改玩家名时实时联动） */
   S.accActive = active || '';   /* 账户设置弹窗判定「当前账户」用（别读 S.config：切账户后它不一定同步） */
   $('#accCurTag').textContent = list.length ? '（当前：' + active + '）' : '';
@@ -4888,8 +4939,11 @@ $('#btnAccAdd').addEventListener('click', async () => {
   const name = $('#accName').value.trim();
   if (!name) { toast('请输入玩家名', 'warn'); return; }
   const r = await window.lmc.accountAdd({ name });
-  if (r.ok) { $('#accName').value = ''; toast('账户已添加'); syncAccountUI(r.active); }
-  else toast(r.error || '添加失败', 'error');
+  /* 失败只弹提示，**不碰列表** —— 失败返回里没有 accounts，重画会把整列清空 */
+  if (!r.ok) { toast(r.error || '添加失败', 'error'); return; }
+  $('#accName').value = '';
+  toast('账户已添加');
+  syncAccountUI(r.active);
   renderAccounts(r.accounts, r.active);
 });
 $('#accName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btnAccAdd').click(); });

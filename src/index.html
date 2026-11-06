@@ -817,6 +817,16 @@
             </details>
           </div>
 
+          <div class="card set-card">
+            <h3><svg class="ic sm"><use href="#i-box"/></svg> 文件完整性</h3>
+            <div class="path-line" id="repairStatus">检查客户端 jar、依赖库、资源文件是否齐全 —— 缺什么补什么，<b>不会动 MOD、存档与设置</b>。</div>
+            <div class="btn-row" style="margin-top:12px">
+              <button class="btn primary" id="btnRepairFiles"><svg class="ic sm"><use href="#i-sync"/></svg> 补全文件</button>
+            </div>
+            <p class="hint">对应 PCL 的「补全文件」：按版本 json 重新核对启动必需的文件（客户端 / 依赖库 / 资源索引与资源文件 / natives / 加载器本体），
+              只下载缺失或大小不对的那些；判断依据是「文件在不在 + 大小对不对」，不会逐个重算哈希，所以几秒就能扫完一个实例。</p>
+          </div>
+
           <div class="btn-row end"><button class="btn primary" id="btnSaveGs"><svg class="ic sm"><use href="#i-check"/></svg> 保存游戏设置</button></div>
         </div>
         <div id="gsMods" style="display:none">

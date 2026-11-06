@@ -148,6 +148,7 @@ try {
    → **1.3（正式版：1.3 全部快照内容合并转正 —— 世界下载（含按实例落点）、存档备份 / 模组清单对齐两个内置插件、装 MOD 先选模组版本、下载可停止与进度、反馈页与新功能投票、配置原子写 / 实例搬家 / 回收站等稳定性修复、存档预览与启动前命令等安全加固）**
    → **1.3.1（紧急修复：默认皮肤改用内置标准史蒂夫 64×64 贴图，主页头像与账户页预览不再手绘色块）**
    → **1.4-snapshot1（功能开关搬进设置项 features.downloadGame / modpack，外置插件凭 control 权限就能把下架的下载页放回来；配合「下载恢复器」2.0.0 插件）**
+   → **1.4-snapshot2（修四类实操问题：中文名把账户列表清空、下载卡在 94%、整合包装进实例目录并验证通过、Fabric 实例缺加载器本体导致启动即崩；整合包不再随下载页下架，只留下载页交给插件；另接管系统代理，开着 VPN/代理也能下载）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -156,7 +157,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.4-snapshot1';
+const APP_VERSION = '1.4-snapshot2';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -245,12 +246,13 @@ const DEFAULT_CONFIG = {
   aiApi: { base: '', key: '', model: 'gpt-4o-mini' },
   /* 插件启用状态：{ seedmap:true, server:true }（键缺省 = 启用） */
   plugins: {},
-  /* 功能开关（原「临时下架」）：false = 下架（默认），true = 打开。
-     downloadGame：下载页的 正式版 / 快照版 / 远古版本 / 全部 四个分类（游戏版本下载入口）
-     modpack    ：下载页「整合包」分类 + 「导入整合包」按钮
+  /* 功能开关（原「临时下架」）：false = 下架，true = 打开。
+     downloadGame：下载页的 正式版 / 快照版 / 远古版本 / 全部 四个分类（游戏版本下载入口）—— 默认下架
+     modpack    ：下载页「整合包」分类 + 「导入整合包」按钮 —— **默认开启**（1.4-snapshot2 起）
      为什么放进配置：外置插件碰不到主界面的 DOM，但凭 control 权限可以改设置 —— 「下载恢复器」
-     这类插件就是靠把 downloadGame 置 true 让内置下载页回来的（渲染层监听 plugin:cfg-changed 立刻重画）。 */
-  features: { downloadGame: false, modpack: false },
+     这类插件就是靠把 downloadGame 置 true 让内置下载页回来的（渲染层监听 plugin:cfg-changed 立刻重画）。
+     整合包不再跟着下载页一起下架：插件只管下载页，用户不装插件也能用整合包。 */
+  features: { downloadGame: false, modpack: true },
   /* 内置插件「存档备份」的设置。
      auto 默认 **关** —— 自动备份会实实在在占盘，不能替用户默认打开；
      打开后两个时机都备（启动前 / 游戏退出后），dir 为空 = 数据目录下的「存档备份」。
@@ -1269,6 +1271,21 @@ try {
   }
 } catch (_) {}
 
+/* 整合包开关下放（1.4-snapshot2）：整合包不再跟着下载页一起下架 —— 插件只管下载页。
+ * 老配置里 features.modpack 一定是 false（旧默认，或插件「还原」按钮写的），这里一次性迁成 true；
+ * 迁移只做一次（featuresOnMigrated 落盘），之后谁再把它关掉都不会被翻回来。 */
+try {
+  if (!config.featuresOnMigrated) {
+    config.features = Object.assign({}, config.features);
+    if (config.features.modpack !== true) {
+      config.features.modpack = true;
+      logLine('[config] 整合包功能改为默认开启（不再随下载页一起下架）');
+    }
+    config.featuresOnMigrated = true;
+    saveConfigNow();
+  }
+} catch (_) {}
+
 let win = null;
 const SMOKE = process.argv.includes('--lmc-smoke');
 function send(ch, payload) {
@@ -1355,6 +1372,115 @@ function logLine(s) {
 function toast(msg, type) { logLine('[toast:' + (type || 'ok') + '] ' + msg); send('app:toast', { msg, type: type || 'ok' }); }
 
 /* ---------------- HTTP ---------------- */
+/* 系统代理接管（下载链路最关键的一处环境差异）
+   Node 自带的 fetch（undici）**不读系统代理**：用户开着 Clash / v2ray 时浏览器一切正常，
+   启动器里的清单、资源文件、MOD 却全是「连接超时」，表现就是进度停住不动（资源阶段 = 94%）。
+   这里在检测到代理时用 https-proxy-agent 把全局 fetch 换成一个兼容实现：
+   返回真正的 Response（body 是 web ReadableStream），下游的流式下载 / arrayBuffer / json 全部照旧。
+   没检测到代理就完全不动，走原生 fetch。 */
+function detectProxyUrl() {
+  for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
+    const v = String(process.env[k] || '').trim();
+    if (/^https?:\/\/\S+$/i.test(v)) return v;
+  }
+  if (process.platform === 'win32') {
+    try {
+      const out = require('child_process').execFileSync('reg', [
+        'query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+      ], { encoding: 'utf8', windowsHide: true, timeout: 2500 });
+      if (!/ProxyEnable\s+REG_DWORD\s+0x1/i.test(out)) return '';
+      const m = out.match(/ProxyServer\s+REG_SZ\s+(\S+)/i);
+      if (!m) return '';
+      let p = m[1].trim();
+      if (/^https?:\/\//i.test(p)) return p;
+      const hm = p.match(/https?=([^;]+)/i);
+      if (hm) return 'http://' + hm[1];
+      if (/^[\w.-]+:\d+$/.test(p)) return 'http://' + p;
+    } catch (_) {}
+  }
+  return '';
+}
+const PROXY_URL = detectProxyUrl();
+if (PROXY_URL) {
+  try {
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    const httpsMod = require('https');
+    const httpMod = require('http');
+    const { Readable } = require('stream');
+    const isSocks = /^socks/i.test(PROXY_URL);
+    const agent = isSocks ? null : new HttpsProxyAgent(PROXY_URL);
+    if (agent) {
+      const nativeFetch = globalThis.fetch;
+      const toHeaders = (raw) => {
+        const h = new Headers();
+        for (const [k, v] of Object.entries(raw || {})) {
+          if (v === undefined || v === null) continue;
+          if (Array.isArray(v)) v.forEach(x => h.append(k, String(x)));
+          else h.set(k, String(v));
+        }
+        return h;
+      };
+      /* 最小 fetch 兼容层：GET/HEAD/POST、重定向跟随、AbortSignal、流式 body */
+      const proxyFetch = (input, init, hop) => new Promise((resolve, reject) => {
+        const raw = typeof input === 'string' ? input : (input && input.url) || String(input);
+        const u = new URL(raw);
+        /* 本机地址（联机信令自测 / 本地更新源 / QA 服务器）一律直连，别送进代理 */
+        if (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1' || u.hostname === '[::1]') {
+          resolve(nativeFetch(input, init));
+          return;
+        }
+        const opt = init || {};
+        const hdrs = toHeaders(opt.headers);
+        if (!hdrs.has('user-agent')) hdrs.set('user-agent', UA_STR);
+        const mod = u.protocol === 'https:' ? httpsMod : httpMod;
+        const req = mod.request(u, { method: (opt.method || 'GET').toUpperCase(), headers: Object.fromEntries(hdrs), agent }, (res) => {
+          const code = res.statusCode || 0;
+          if (code >= 300 && code < 400 && res.headers.location && opt.redirect !== 'manual' && (hop || 0) < 5) {
+            res.resume();
+            resolve(proxyFetch(new URL(res.headers.location, u).href, init, (hop || 0) + 1));
+            return;
+          }
+          const body = Readable.toWeb(res);
+          resolve(new Response(body, { status: code, statusText: res.statusMessage, headers: toHeaders(res.headers) }));
+        });
+        const sig = opt.signal;
+        const onAbort = () => { try { req.destroy(new Error('aborted')); } catch (_) {} };
+        if (sig) {
+          if (sig.aborted) { onAbort(); }
+          else sig.addEventListener('abort', onAbort, { once: true });
+          req.on('close', () => { try { sig.removeEventListener('abort', onAbort); } catch (_) {} });
+        }
+        req.on('error', (e) => reject(e));
+        if (opt.body) req.write(opt.body);
+        req.end();
+      });
+      /* 代理是「配了但已经失效」（常见：Clash 关了，系统代理还留着）时，所有请求都会连不上。
+         这里兜一层：代理侧网络错误就改直连重试一次（只对无 body 的 GET/HEAD，避免请求体被消费），
+         别让一个死代理把用户彻底堵死。 */
+      const deadProxyHosts = new Set();
+      globalThis.fetch = async (input, init) => {
+        const method = String((init && init.method) || 'GET').toUpperCase();
+        try {
+          return await proxyFetch(input, init, 0);
+        } catch (e) {
+          if ((method !== 'GET' && method !== 'HEAD') || (init && init.body)) throw e;
+          let host = '';
+          try { host = new URL(typeof input === 'string' ? input : (input && input.url) || '').host; } catch (_) {}
+          if (!deadProxyHosts.has(host)) {
+            deadProxyHosts.add(host);
+            logLine('[net] 代理连不上（' + host + '），本次改直连: ' + (e && e.message));
+          }
+          return nativeFetch(input, init);
+        }
+      };
+      logLine('[net] 已接管系统代理: ' + PROXY_URL.replace(/\/\/[^@/]*@/, '//***@'));
+      /* 保留原生实现以备排查（不在日志里暴露完整代理地址） */
+      globalThis.__xlcNativeFetch = nativeFetch;
+    }
+  } catch (e) {
+    logLine('[net] 代理接管失败，改走直连: ' + e.message);
+  }
+}
 const UA_STR = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 XLC/' + APP_VERSION;
 async function fetchBuf(url, signal) {
   const res = await fetch(url, { headers: { 'User-Agent': UA_STR }, signal });
@@ -1378,11 +1504,41 @@ function wsErrGuard(ws) {
 }
 /* 先下到 .xlc-tmp 临时文件，校验通过后原子改名到最终位置——
    取消/断网/校验失败都不会在 versions/、mods/ 等最终位置留下半截文件 */
+/* 单连接「无字节停滞」超时：资源文件是几千个并发的小文件，某个连接卡死时既不报错也不断流，
+   整个池会永远吊在 reader.read() 上 —— 用户看到的就是「进度停在 94% 不动」。
+   连续这么多毫秒收不到任何字节就主动掐断，交给 downloadTo 换源重试。 */
+const DL_IDLE_MS = (SMOKE_EARLY && parseInt(process.env.XLC_DL_IDLE_MS, 10)) || 25000;
 async function downloadSingle(url, dest, onProgress, signal, opts) {
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   const tmp = dest + '.xlc-tmp';
-  const res = await fetch(url, { headers: { 'User-Agent': UA_STR }, redirect: 'follow', signal });
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' · ' + url);
+  /* 两级 abort：外部 signal（用户点「停止安装」）与内部停滞定时器都走这个 controller，
+     用 stalled 标记区分，好让上层知道是「卡死」而不是「用户取消」。 */
+  const ac = new AbortController();
+  let stalled = false;
+  const onOuterAbort = () => { try { ac.abort(); } catch (_) {} };
+  if (signal) signal.addEventListener('abort', onOuterAbort, { once: true });
+  let idle = null;
+  const touch = () => {
+    if (idle) clearTimeout(idle);
+    idle = setTimeout(() => { stalled = true; try { ac.abort(); } catch (_) {} }, DL_IDLE_MS);
+  };
+  const clearIdle = () => { if (idle) { clearTimeout(idle); idle = null; } };
+  const detach = () => { clearIdle(); if (signal) signal.removeEventListener('abort', onOuterAbort); };
+  const stalledErr = () => {
+    const e = new Error('连接停滞（' + Math.round(DL_IDLE_MS / 1000) + ' 秒没收到数据）');
+    e.stalled = true;
+    return e;
+  };
+  touch();
+  let res;
+  try {
+    res = await fetch(url, { headers: { 'User-Agent': UA_STR }, redirect: 'follow', signal: ac.signal });
+  } catch (e) {
+    detach();
+    if (stalled && !(signal && signal.aborted)) throw stalledErr();
+    throw e;
+  }
+  if (!res.ok) { detach(); throw new Error('HTTP ' + res.status + ' · ' + url); }
   const total = parseInt(res.headers.get('content-length') || '0', 10);
   const ws = fs.createWriteStream(tmp);
   const guard = wsErrGuard(ws);
@@ -1390,6 +1546,7 @@ async function downloadSingle(url, dest, onProgress, signal, opts) {
   let got = 0, lastPct = -1;
   try {
     for (;;) {
+      touch();                              /* 等下一块之前重置：真卡住时定时器才能到点 */
       const { done, value } = await reader.read();
       if (done) break;
       got += value.length;
@@ -1405,8 +1562,11 @@ async function downloadSingle(url, dest, onProgress, signal, opts) {
   } catch (e) {
     try { ws.destroy(); } catch (_) {}
     try { await fsp.unlink(tmp); } catch (_) {}
+    detach();
+    if (stalled && !(signal && signal.aborted)) throw stalledErr();
     throw e;
   }
+  detach();
   if (total && got !== total && !(opts && opts.noLenCheck)) {
     try { await fsp.unlink(tmp); } catch (_) {}
     throw new Error('下载不完整 ' + got + '/' + total);
@@ -1541,6 +1701,12 @@ const MANIFEST_URL = {
   official: 'https://launchermeta.mojang.com/mc/game/version_manifest_v2.json',
   bmclapi: 'https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json'
 };
+/* 冒烟/回归专用：把版本清单也指到本地假服务器（与 XLC_DL_IDLE_MS 同款，只在早期冒烟里生效）。
+   没有它，整合包安装链路的自动化测试就得先老老实实下 600MB 原版文件，跑一次十几分钟。 */
+if (SMOKE_EARLY && process.env.XLC_SMOKE_MANIFEST_URL) {
+  MANIFEST_URL.official = String(process.env.XLC_SMOKE_MANIFEST_URL);
+  MANIFEST_URL.bmclapi = String(process.env.XLC_SMOKE_MANIFEST_URL);
+}
 
 function sha1(buf) { return crypto.createHash('sha1').update(buf).digest('hex'); }
 /* 大文件算 SHA1 走流式，别把整个 client.jar 读进内存 */
@@ -1554,10 +1720,43 @@ function sha1File(p) {
   });
 }
 
+/* 镜像兜底地址：官方 CDN 在部分地区会「连得上但不给数据」，整批资源文件就卡住。
+   换了源也不影响正确性 —— 每个文件都按 SHA1 校验，内容必须对得上才落盘。 */
+function mirrorAltUrl(u) {
+  return String(u)
+    .replace('https://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/assets')
+    .replace('https://piston-data.mojang.com', 'https://bmclapi2.bangbang93.com')
+    .replace('https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com')
+    .replace('https://piston-meta.mojang.com', 'https://bmclapi2.bangbang93.com');
+}
+const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* 源级熔断：某个源连续失败（典型是 BMCLAPI 的 assets 镜像「连得上但不给数据」）就冷却 5 分钟，
+   期间优先走另一个源 —— 否则几千个资源文件每个都要先等满一次停滞超时才回退，整体照样卡住。 */
+const HOST_FAIL = new Map();          /* host → { n, until } */
+function hostOf(u) { try { return new URL(u).host; } catch (_) { return String(u).slice(0, 60); } }
+function hostCooling(u) {
+  const s = HOST_FAIL.get(hostOf(u));
+  return !!(s && s.until && s.until > Date.now());
+}
+function orderByHostHealth(list) {
+  return list.filter(u => !hostCooling(u)).concat(list.filter(hostCooling));
+}
+function hostFail(u) {
+  const k = hostOf(u);
+  const s = HOST_FAIL.get(k) || { n: 0, until: 0 };
+  s.n += 1;
+  if (s.n >= 3) { s.until = Date.now() + 5 * 60 * 1000; s.n = 0; }
+  HOST_FAIL.set(k, s);
+}
+function hostOk(u) { const s = HOST_FAIL.get(hostOf(u)); if (s) { s.n = 0; s.until = 0; } }
+
 /* downloadTo(url, dest, expectSha1, signal, sizeHint)：
    第 3 参是 SHA1，不是进度回调；第 5 参 sizeHint = 调用方已知的文件大小（版本 json 里都有），
    ≥8MB 时自动升级为多线程分段下载 —— 「30 分钟才下载完一个游戏」的主因就是
-   client.jar 这类大文件此前一直走单流。 */
+   client.jar 这类大文件此前一直走单流。
+   失败会换源重试（主源 → 备用源 → 主源）：单连接停滞 25 秒就被掐断，资源文件几千个，
+   没有这一层时只要有一个连接卡死，整批就永远停在 94%。 */
 async function downloadTo(url, dest, expectSha1, signal, sizeHint) {
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   try {
@@ -1567,32 +1766,50 @@ async function downloadTo(url, dest, expectSha1, signal, sizeHint) {
       if (await sha1File(dest) === expectSha1) { netAddSkip(st.size); return 0; }
     }
   } catch (_) {}
-  /* 流式下载（原来用 fetchBuf 把整个文件读进内存 —— 下 client.jar 那几十秒里进度一动不动，
-     界面只能拿百分比硬算速度，于是出现「预计剩余 1 秒」还永不变化的假象）。
-     noLenCheck：服务端若做了 gzip，content-length 与解压后字节数不等，交给 SHA1 兜底校验。
-     signal：安装任务的 AbortController —— 用户点「停止安装」时立刻打断进行中的 fetch，
-     而不是等这个文件下完才在下一个检查点生效。abort 引发的失败统一改标 cancelled，
-     这样 runPool 立即中止整个池、调度层也走「已取消」分支而不是「安装失败」。 */
-  let got;
-  try {
-    /* 大文件（调用方给了 sizeHint 且 ≥ MT_MIN_BYTES）走多线程分段（downloadBig 内部失败自动回退单流）；
-       小文件直接单流 —— 资源文件平均只有十几 KB，发 Range 探测纯亏 */
-    got = (sizeHint && sizeHint >= MT_MIN_BYTES)
-      ? await downloadBig(mapUrl(url), dest, null, signal, { noLenCheck: true })
-      : await downloadSingle(mapUrl(url), dest, null, signal, { noLenCheck: true });
-  } catch (e) {
+  const primary = mapUrl(url);
+  /* 当前走镜像 → 备用是官方原地址；当前是官方地址 → 备用是 BMCLAPI。两条路总有一条通。 */
+  const alt = primary !== url ? url : mirrorAltUrl(url);
+  const base = alt && alt !== primary ? orderByHostHealth([primary, alt]) : [primary];
+  const tries = base.length > 1 ? [base[0], base[1], base[0]] : [primary, primary];
+  let lastErr = null;
+  for (let i = 0; i < tries.length; i++) {
     if (signal && signal.aborted) {
       const ce = new Error('安装已被用户取消');
       ce.cancelled = true;
       throw ce;
     }
-    throw e;
+    try {
+      /* 流式下载（原来用 fetchBuf 把整个文件读进内存 —— 下 client.jar 那几十秒里进度一动不动，
+         界面只能拿百分比硬算速度，于是出现「预计剩余 1 秒」还永不变化的假象）。
+         noLenCheck：服务端若做了 gzip，content-length 与解压后字节数不等，交给 SHA1 兜底校验。
+         signal：安装任务的 AbortController —— 用户点「停止安装」时立刻打断进行中的 fetch。 */
+      const got = (sizeHint && sizeHint >= MT_MIN_BYTES)
+        ? await downloadBig(tries[i], dest, null, signal, { noLenCheck: true })
+        : await downloadSingle(tries[i], dest, null, signal, { noLenCheck: true });
+      if (expectSha1 && await sha1File(dest) !== expectSha1) {
+        try { await fsp.unlink(dest); } catch (_) {}
+        throw new Error('SHA1 校验失败: ' + tries[i]);
+      }
+      if (i > 0) logLine('[download] 换源成功（第 ' + (i + 1) + ' 次尝试）: ' + String(tries[i]).slice(0, 120));
+      hostOk(tries[i]);
+      return got;
+    } catch (e) {
+      if (signal && signal.aborted) {
+        const ce = new Error('安装已被用户取消');
+        ce.cancelled = true;
+        throw ce;
+      }
+      lastErr = e;
+      hostFail(tries[i]);
+      /* 半截临时文件不能留在最终位置（downloadSingle 已清 .xlc-tmp，这里清可能残留的 dest） */
+      if (i < tries.length - 1) {
+        logLine('[download] 第 ' + (i + 1) + ' 次失败，' + (600 * (i + 1)) + 'ms 后换源重试: ' +
+          String(tries[i]).slice(0, 100) + ' · ' + e.message);
+        await sleepMs(600 * (i + 1));
+      }
+    }
   }
-  if (expectSha1 && await sha1File(dest) !== expectSha1) {
-    try { await fsp.unlink(dest); } catch (_) {}
-    throw new Error('SHA1 校验失败: ' + url);
-  }
-  return got;
+  throw lastErr || new Error('下载失败: ' + url);
 }
 
 /* 文件级并发池大小（设置 → 下载 → 文件并发数）：默认 32，可 4~64。
@@ -1862,6 +2079,9 @@ async function installVanillaFiles(meta, gameId, opt, cancelKey, signal) {
   // 6. 全部就绪后才落盘版本 JSON
   await fsp.writeFile(path.join(vd, gameId + '.json'), JSON.stringify(vjson, null, 2));
   if (!opt.noAssets) send('install:progress', { stage: 'done', percent: 100, text: '安装完成' });
+  /* 必须回传实例名：整合包安装要靠它定位 versions/<id>（以前一直返回 undefined，
+     结果 installModrinthIndex 里 path.join(gd,'versions',versionId) 直接抛类型错误） */
+  return gameId;
 }
 
 /* ---------------- 安装：Fabric / Quilt（元数据组装） ---------------- */
@@ -1900,7 +2120,25 @@ async function installFabricLike(gameVer, kind, customName, opt) {
     seenLib.add(a.downloads.artifact.path);
     libs.push(a);
   };
+  /* 加载器本体（fabric-loader / quilt-loader）自己也要进 classpath！
+     元数据里它只出现在 loader.maven，既不在 loader.libraries（那是它的依赖），
+     也不在 launcherMeta.libraries 里 —— 1.4-snapshot2 及更早只推了后两处，
+     装出来的实例 mainClass 写着 KnotClient 却没有 loader jar，
+     启动必炸 ClassNotFoundException: net.fabricmc.loader.impl.launch.knot.KnotClient。
+     老的元数据形态没有 maven 字段，就按坐标规则自己拼一个。 */
+  if (pick.loader) {
+    const ldrMaven = pick.loader.maven ||
+      ((kind === 'fabric' ? 'net.fabricmc:fabric-loader:' : 'org.quiltmc:quilt-loader:') + loaderVer);
+    pushLib({ name: ldrMaven, url: mavenBase });
+  }
   if (pick.intermediary && pick.intermediary.maven) pushLib({ name: pick.intermediary.maven, url: mavenBase });
+  /* 中间映射缺失（上游对刚出的快照常回 0.0.0，jar 里 mappings.tiny 是空的）：
+     实测原版客户端还能进（loader 直接按混淆名跑），但依赖 intermediary 的模组会崩，
+     装机时说一句，免得用户装完一堆 MOD 才发现。 */
+  if (pick.intermediary && String(pick.intermediary.version || '') === '0.0.0') {
+    logLine('[install] ' + gameVer + ' 的 intermediary 映射尚未发布（上游返回 0.0.0），原版可玩，装模组大概率崩');
+    toast('Fabric 还没发布 ' + gameVer + ' 的映射：原版能进，但装模组可能崩溃（等上游更新）', 'warn');
+  }
   /* loader 自带库（Fabric/Quilt 元数据里可能是数组） */
   for (const l of (pick.loader && Array.isArray(pick.loader.libraries) ? pick.loader.libraries : [])) pushLib(l);
   /* launcherMeta.libraries：Fabric v2 / Quilt v3 现返回 {client, common, server, development} 对象，
@@ -2562,7 +2800,10 @@ if (SMOKE_EARLY && process.env.LMC_SMOKE_DL) {
     const t0 = Date.now();
     let got = 0, err = '';
     try {
-      got = await downloadBig(String(p.url), dest, null, sig, {});
+      /* via=to 走 downloadTo（带停滞超时 + 换源重试）；默认仍测 downloadBig（停止/回退那条路） */
+      got = (p && p.via === 'to')
+        ? await downloadTo(String(p.url), dest, (p && p.sha1) || null, sig, Number(p && p.sizeHint) || 0)
+        : await downloadBig(String(p.url), dest, null, sig, {});
     } catch (e) { err = e.message; }
     const out = {
       ok: !err,
@@ -3804,7 +4045,13 @@ async function installModrinthIndex(index, packBuf, displayName, dlsig) {
      只能等到下一个整合包文件开始时才生效 —— 先这么用，深改游戏安装超本次范围 */
   const versionId = await installMcWithLoader(mcVer, loader, name);
   const gd = config.gameDir;
-  // mod 文件（path 相对 gameDir，禁止越界）
+  /* 整合包一律装进实例自己的目录（versions/<id>，PCL / HMCL 同款）：
+     先建一个空 mods/，让「自动隔离」判定成立（instanceIsolated = 有 mods/ 或 saves/）。
+     以前这里把 mods 与 overrides 全写进游戏根目录 —— 启动时实例不被判为隔离，
+     gameDir 退回根目录，两个整合包会互相覆盖 mods；装了也不隔离，存档/配置全混在一起。 */
+  const instDir = path.join(gd, 'versions', versionId);
+  await fsp.mkdir(path.join(instDir, 'mods'), { recursive: true });
+  // mod 文件（path 相对游戏目录，禁止越界）
   const files = index.files || [];
   let i = 0;
   phaseBegin('modpack-files', files.reduce((s, f) => s + (f.fileSize || 0), 0));
@@ -3815,31 +4062,34 @@ async function installModrinthIndex(index, packBuf, displayName, dlsig) {
     const url = (f.downloads || [])[0];
     if (!url) continue;
     send('install:progress', { stage: 'modpack-files', current: i, total: files.length, percent: Math.round(i / files.length * 100), text: '整合包文件 ' + i + '/' + files.length });
-    const dest = path.join(gd, f.path);
+    const dest = path.join(instDir, f.path);
     await mrDownload(url, dest, () => {}, dlsig);
   }
-  // overrides 覆盖到 gameDir（options.txt 不覆盖已有）
+  // overrides 覆盖到实例目录（options.txt 不覆盖已有）
   if (packBuf) {
     const ovr = findZipEntries(packBuf, n => n.startsWith('overrides/') && !n.endsWith('/'));
     let copied = 0;
     for (const it of ovr) {
       const rel = it.name.slice('overrides/'.length);
       if (!rel || /\.\./.test(rel)) continue;
-      const dest = path.join(gd, rel);
+      const dest = path.join(instDir, rel);
       if (fs.existsSync(dest)) continue;
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, it.data);
       copied++;
     }
-    send('launch:log', '[整合包] overrides 应用 ' + copied + ' 个文件');
+    send('launch:log', '[整合包] overrides 应用 ' + copied + ' 个文件（实例目录）');
   }
-  return { versionId, mods: files.length };
+  return { versionId, mods: files.length, isolated: true };
 }
 ipcMain.handle('modrinth:install-modpack', async (_e, p) => {
   const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
   try {
     netReset();
-    const vers = await mrJson('/project/' + encodeURIComponent(p.projectId) + '/version');
+    /* versionId 可选：指定装整合包的某个具体版本（界面暂只装最新，但导入 / 手工调用需要）。 */
+    const vers = (p && p.versionId)
+      ? [await mrJson('/version/' + encodeURIComponent(p.versionId))]
+      : await mrJson('/project/' + encodeURIComponent(p.projectId) + '/version');
     if (!vers.length) throw new Error('该整合包没有可用版本');
     const file = (vers[0].files || []).find(f => f.primary) || vers[0].files[0];
     if (!file || !/\.mrpack$/i.test(file.filename || '')) throw new Error('未找到 .mrpack 主文件');
@@ -3858,6 +4108,30 @@ ipcMain.handle('modrinth:install-modpack', async (_e, p) => {
     return { ok: false, cancelled: !!(dlsig && dlsig.aborted), error: e.message };
   } finally { if (p.jobKey) dlRelease(p.jobKey); }
 });
+/* 冒烟测试专用（仅 LMC_SMOKE_MP=1 时注册）：直接喂一份本地 .mrpack 走真正的 installModrinthIndex，
+   不经过 Modrinth 接口 —— 本地假服务器就能把「装进 versions/<实例> + 自动隔离」整条链路跑通。
+   生产环境根本不注册这个通道。 */
+if (SMOKE_EARLY && process.env.LMC_SMOKE_MP) {
+  ipcMain.handle('smoke:mp-local', async (_e, p) => {
+    try {
+      const zf = String((p && p.zip) || '');
+      const buf = await fsp.readFile(zf);
+      const index = JSON.parse(zipReadEntry(buf, 'modrinth.index.json').toString('utf8'));
+      const r = await installModrinthIndex(index, buf, (p && p.name) || 'QAPack');
+      /* 落盘事实交给测试断言（渲染层没有 fs） */
+      const inst = path.join(config.gameDir, 'versions', r.versionId);
+      const ls = (d) => { try { return fs.readdirSync(d); } catch (_) { return null; } };
+      return Object.assign({ ok: true }, r, {
+        instDir: inst,
+        modsOnDisk: ls(path.join(inst, 'mods')),
+        rootModsExists: fs.existsSync(path.join(config.gameDir, 'mods')),
+        configLanded: fs.existsSync(path.join(inst, 'config', 'qa.txt')),
+        versionJson: fs.existsSync(path.join(inst, r.versionId + '.json')),
+        libOnDisk: ls(path.join(config.gameDir, 'libraries'))
+      });
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+}
 
 /* ---------------- 整合包导出 / 本地导入 ---------------- */
 /* ============================================================================
@@ -5049,6 +5323,236 @@ async function loadVersionChain(id, gd, depth) {
   return { rootId: json.clientVersion || id, jarPath: path.join(gd, 'versions', id, id + '.jar'), json };
 }
 
+/* Fabric / Quilt 实例的加载器本体，在版本 json 里本该有一条库记录（net.fabricmc:fabric-loader:x）。
+   但 Fabric 元数据把它放在 loader.maven 里，既不在 loader.libraries（那是它的依赖 asm / mixin），
+   也不在 launcherMeta.libraries —— 1.4-snapshot2 及更早的安装器只取了后两处，于是装出来的实例
+   mainClass 指着 KnotClient、classpath 里却没有 jar，一启动就是
+   ClassNotFoundException: net.fabricmc.loader.impl.launch.knot.KnotClient。
+   这个函数负责算出「该用哪个版本、去哪下、落到哪」，启动自愈与「补全文件」共用。
+   原版 / Forge 实例（mainClass 不是 fabric/quilt loader）返回 null。 */
+async function loaderJarFor(gd, json, versionId, rootId) {
+  const mainCls = String(json.mainClass || '');
+  if (!/^net\.(fabricmc|quiltmc)\.loader\./.test(mainCls)) return null;
+  const quilt = /^net\.quiltmc\./.test(mainCls);
+  const art = quilt ? 'quilt-loader' : 'fabric-loader';
+  const grp = quilt ? 'quiltmc' : 'fabricmc';
+  const base = quilt ? 'https://maven.quiltmc.org/repository/release/' : 'https://maven.fabricmc.net/';
+  const libRoot = path.join(gd, 'libraries', 'net', grp, art);
+  /* ① 版本名里通常就带着加载器版本（<MC>-fabric-0.20.1，安装器生成的实例都是这个形状） */
+  let lv = ((new RegExp('-(?:fabric|quilt)-([0-9][0-9A-Za-z.+]*)$').exec(String(versionId || '')) || [])[1] || '');
+  /* ② 用户改过名 / 导入的整合包：问一次元数据，取最新构建 */
+  if (!lv) {
+    try {
+      const api = quilt ? 'https://meta.quiltmc.org/v3/versions/loader/' : 'https://meta.fabricmc.net/v2/versions/loader/';
+      const list = await fetchJson(api + encodeURIComponent(rootId || ''));
+      lv = (list && list[0] && list[0].loader && list[0].loader.version) || '';
+    } catch (_) {}
+  }
+  /* ③ 再退一步：本地下过哪个版本就用哪个（loader 与 MC 版本基本解耦） */
+  if (!lv) {
+    try {
+      const ds = fs.readdirSync(libRoot)
+        .filter(d => fs.existsSync(path.join(libRoot, d, art + '-' + d + '.jar')))
+        .sort(compareVer);
+      if (ds.length) lv = ds[ds.length - 1];
+    } catch (_) {}
+  }
+  if (!lv) {
+    throw new Error('这个实例是 ' + (quilt ? 'Quilt' : 'Fabric') + ' 版本，但缺少加载器本体 jar，也判断不出该装哪个版本：' +
+      '请到「游戏设置 → 更改加载器版本」重装一次');
+  }
+  const rel = 'net/' + grp + '/' + art + '/' + lv + '/' + art + '-' + lv + '.jar';
+  return {
+    art, lv, grp, base, rel,
+    name: (quilt ? 'org.quiltmc:quilt-loader:' : 'net.fabricmc:fabric-loader:') + lv,
+    dest: path.join(gd, 'libraries', rel)
+  };
+}
+
+/* ---------------- 补全文件（对齐 PCL「版本设置 → 补全文件」） ----------------
+   按版本 json 重新核对启动所需的文件：客户端 jar / 依赖库 / 资源索引 / 资源对象 / natives，
+   缺什么补什么；Fabric·Quilt 实例还缺加载器本体时一并补上并写回版本 json。
+   **不碰 MOD、存档、配置** —— 只补「游戏本身该有的文件」。
+   「在不在」的判定 = 文件存在 + 大小与 json 里写的一致（json 给了 size 时）；不做全量 SHA1：
+   几千个资源文件逐个哈希要好几分钟，而下载链路本身已经按 SHA1 校验，收益不抵时间。 */
+function fileLooksOk(p, size) {
+  try {
+    const st = fs.statSync(p);
+    if (!st.isFile()) return false;
+    return !size || st.size === Number(size);
+  } catch (_) { return false; }
+}
+
+async function repairInstanceFiles(versionId, onProgress) {
+  const gd = config.gameDir;
+  const chain = await loadVersionChain(versionId, gd, 0);
+  const json = chain.json;
+  const tasks = [];
+  const queued = new Set();
+  let checked = 0;
+  const emit = (stage, percent, text) => {
+    try { onProgress && onProgress({ stage, percent, text, checked, total: tasks.length, done: 0 }); } catch (_) {}
+  };
+  const need = (t) => {
+    if (!t || !t.dest || queued.has(t.dest)) return;
+    if (fileLooksOk(t.dest, t.size)) return;
+    queued.add(t.dest);
+    tasks.push(t);
+  };
+
+  emit('scan', 2, '正在核对文件…');
+
+  /* 1. 客户端 jar */
+  const cj = json.downloads && json.downloads.client;
+  if (cj && cj.url) {
+    checked++;
+    need({ url: mapUrl(cj.url), dest: chain.jarPath, sha1: cj.sha1 || null, size: cj.size, label: '客户端 jar' });
+  } else if (!fs.existsSync(chain.jarPath)) {
+    /* json 里连下载地址都没有（外部导入的半截实例）：补不了，说清楚比默默跳过强 */
+    throw new Error('版本 json 里没有客户端 jar 的下载地址，补全无从下手 —— 请重新安装该版本');
+  }
+
+  /* 2. 依赖库（两种格式都认：Mojang 的 downloads.artifact 与 maven 坐标 name+url） */
+  const libRels = new Set();
+  for (const l of json.libraries || []) {
+    if (!rulePass(l.rules)) continue;
+    const a = l.downloads && l.downloads.artifact;
+    if (a && a.path) {
+      libRels.add(a.path);
+      checked++;
+      need({
+        url: mapUrl(a.url), dest: path.join(gd, 'libraries', a.path),
+        sha1: a.sha1 || null, size: a.size, label: l.name || a.path
+      });
+      continue;
+    }
+    if (!l.name) continue;
+    const parts = String(l.name).split(':');
+    if (parts.length !== 3) continue;
+    const rel = parts[0].replace(/\./g, '/') + '/' + parts[1] + '/' + parts[2] + '/' + parts[1] + '-' + parts[2] + '.jar';
+    libRels.add(rel);
+    checked++;
+    const base = (l.url || 'https://libraries.minecraft.net/').replace(/\/?$/, '/');
+    need({ url: base + rel, dest: path.join(gd, 'libraries', rel), sha1: l.sha1 || null, size: 0, label: l.name });
+  }
+
+  /* 3. 加载器本体：旧安装器生成的实例 json 里没有这条记录，补下并写回（免得每次启动都自愈一遍） */
+  let patchLoader = null;
+  try {
+    const ldr = await loaderJarFor(gd, json, versionId, chain.rootId);
+    if (ldr && !libRels.has(ldr.rel)) {
+      checked++;
+      need({ url: ldr.base + ldr.rel, dest: ldr.dest, sha1: null, size: 0, label: ldr.art });
+      patchLoader = ldr;
+    }
+  } catch (e) {
+    logLine('[repair] 加载器本体解析失败: ' + e.message);
+  }
+
+  /* 4. 资源索引（必须先拿到它，才知道要哪些资源对象） */
+  let indexOk = false;
+  let indexMissing = false;   /* 索引缺失也要算进「缺几个」里，用户看到的数字才对得上 */
+  const ai = json.assetIndex;
+  if (ai && ai.id) {
+    const idxPath = path.join(gd, 'assets', 'indexes', ai.id + '.json');
+    checked++;
+    if (!fileLooksOk(idxPath, ai.size)) {
+      indexMissing = true;
+      if (ai.url) {
+        emit('index', 4, '补下资源索引 ' + ai.id);
+        try { await downloadTo(mapUrl(ai.url), idxPath, ai.sha1 || null, null, ai.size || 0); } catch (e) { logLine('[repair] 资源索引下载失败: ' + e.message); }
+      }
+    }
+    indexOk = fileLooksOk(idxPath, ai.size);
+    if (indexOk) {
+      let idx = null;
+      try { idx = JSON.parse(await fsp.readFile(idxPath, 'utf8')); } catch (_) {}
+      for (const o of Object.values((idx && idx.objects) || {})) {
+        if (!o || !o.hash) continue;
+        checked++;
+        need({
+          url: 'https://resources.download.minecraft.net/' + o.hash.slice(0, 2) + '/' + o.hash,
+          dest: path.join(gd, 'assets', 'objects', o.hash.slice(0, 2), o.hash),
+          sha1: o.hash, size: o.size, label: '资源文件'
+        });
+      }
+    } else {
+      logLine('[repair] 资源索引不可用，本次跳过资源文件核对');
+    }
+  }
+
+  /* natives 目录是否还在（解压等下载完再做，native jar 可能本身就是刚补的） */
+  const nativesDir = path.join(gd, 'versions', versionId, 'natives');
+  let needNatives = false;
+  try {
+    needNatives = !fs.existsSync(nativesDir) || !fs.readdirSync(nativesDir).some(n => /\.dll$/i.test(n));
+  } catch (_) { needNatives = true; }
+
+  /* ---- 下载缺失文件 ---- */
+  const total = tasks.length + (indexMissing ? 1 : 0);
+  emit('scan', 5, total ? ('核对完成：' + checked + ' 个文件，缺 ' + total + ' 个') : ('核对完成：' + checked + ' 个文件都在'));
+  let done = (indexMissing && indexOk) ? 1 : 0;
+  let failed = (indexMissing && !indexOk) ? 1 : 0;
+  if (tasks.length) {
+    const fails = await runPool(tasks, dlPoolSize(), async (t) => {
+      /* 大小不对又没有 SHA1 可比时，downloadTo 会把旧文件当「已存在」直接跳过 —— 先删掉 */
+      if (!t.sha1) { try { if (fs.existsSync(t.dest)) fs.unlinkSync(t.dest); } catch (_) {} }
+      await downloadTo(t.url, t.dest, t.sha1 || null, null, t.size || 0);
+      done++;
+      if (done % 3 === 0 || done === total) {
+        try { onProgress && onProgress({ stage: 'files', percent: 5 + Math.round(done / total * 88), text: '补全 ' + done + '/' + total + ' · ' + (t.label || ''), checked, total, done }); } catch (_) {}
+      }
+    });
+    failed = fails.length;
+    if (failed) logLine('[repair] ' + failed + ' 个文件补全失败，例如 ' + fails[0].error);
+  }
+
+  /* ---- natives 重新解压 ---- */
+  if (needNatives) {
+    try {
+      await fsp.mkdir(nativesDir, { recursive: true });
+      for (const l of json.libraries || []) {
+        if (!rulePass(l.rules) || !l.natives || !l.natives.windows) continue;
+        const cls = l.natives.windows.replace('${arch}', os.arch() === 'x64' ? '64' : '32');
+        const c = l.downloads && l.downloads.classifiers && (l.downloads.classifiers[cls] || l.downloads.classifiers['natives-windows']);
+        if (!c || !c.path) continue;
+        const jp = path.join(gd, 'libraries', c.path);
+        if (!fs.existsSync(jp)) continue;
+        try {
+          extractZipEntries(await fsp.readFile(jp), nativesDir, n => n.endsWith('.dll') && !n.startsWith('META-INF'));
+        } catch (_) {}
+      }
+    } catch (e) { logLine('[repair] 重新解压 natives 失败: ' + e.message); }
+  }
+
+  /* ---- 把补上的加载器本体写回版本 json（下次启动就不必再自愈） ---- */
+  let patched = false;
+  if (patchLoader && fs.existsSync(patchLoader.dest)) {
+    try {
+      const childPath = path.join(gd, 'versions', versionId, versionId + '.json');
+      const child = JSON.parse(await fsp.readFile(childPath, 'utf8'));
+      const has = (child.libraries || []).some(l => {
+        const a = l.downloads && l.downloads.artifact;
+        if (a && a.path) return a.path === patchLoader.rel;
+        return String(l.name || '') === patchLoader.name;
+      });
+      if (!has) {
+        child.libraries = (child.libraries || []).concat([{
+          name: patchLoader.name,
+          downloads: { artifact: { url: patchLoader.base + patchLoader.rel, path: patchLoader.rel } }
+        }]);
+        await fsp.writeFile(childPath, JSON.stringify(child, null, 2));
+        patched = true;
+      }
+    } catch (e) { logLine('[repair] 写回版本 json 失败: ' + e.message); }
+  }
+
+  const text = '补全完成：核对 ' + checked + ' 个文件，补下 ' + done + ' 个' + (failed ? '，失败 ' + failed + ' 个' : '') + (patched ? ' · 已补记加载器' : '');
+  logLine('[repair] ' + versionId + ' · ' + text);
+  try { onProgress && onProgress({ stage: 'done', percent: 100, text, checked, total, done }); } catch (_) {}
+  return { ok: failed === 0, checked, missing: total, downloaded: done, failed, nativesFixed: needNatives, patchedLoader: patched, indexOk };
+}
+
 /* ---------------- 启动游戏 ---------------- */
 function offlineUUID(name) {
   const h = crypto.createHash('md5').update('OfflinePlayer:' + name).digest();
@@ -5200,6 +5704,32 @@ function launchModeLabel() {
    走完整条准备链路（版本链 / 账户 / Java / 内存 / classpath / natives / 启动参数），
    到 spawn 之前停下并打印分段耗时 —— 这样优化启动速度能有可复现的对照数字。 */
 let LAUNCH_DRYRUN = false;
+/* 补全文件（PCL「版本设置 → 补全文件」等价物）：只查启动必需的游戏文件，缺什么补什么。
+   与启动锁共用一把闸：启动中 / 安装中不许同时补，免得两边抢同一批文件。 */
+let REPAIRING = false;
+ipcMain.handle('instance:repair', async (_e, p) => {
+  const id = String((p && p.versionId) || '').trim();
+  if (!id || path.basename(id) !== id) return { ok: false, error: '版本名不合法' };
+  if (REPAIRING) return { ok: false, error: '已经在补全另一个实例了，稍等一下' };
+  if (LAUNCHING) return { ok: false, error: '游戏正在启动 / 运行中，先关掉游戏再补全' };
+  REPAIRING = true;
+  setStatus('补全文件: ' + id, true);
+  try {
+    const r = await repairInstanceFiles(id, q => send('repair:progress', q));
+    setStatus('就绪');
+    toast(r.failed ? ('补全完成，' + r.failed + ' 个文件没下下来，可稍后重试') : ('补全完成：核对 ' + r.checked + ' 个文件，补下 ' + r.downloaded + ' 个'),
+      r.failed ? 'warn' : 'ok');
+    return r;
+  } catch (e) {
+    setStatus('就绪');
+    logLine('[repair] 失败: ' + e.message);
+    toast('补全失败: ' + e.message, 'error');
+    return { ok: false, error: e.message };
+  } finally {
+    REPAIRING = false;
+  }
+});
+
 ipcMain.handle('launch:start', (_e, opts) => {
   if (LAUNCHING) {
     logLine('[launch] 已拦截重复启动请求（主进程启动锁）');
@@ -5228,7 +5758,7 @@ async function runLaunch(opts) {
   const chain = await loadVersionChain(versionId, gd, 0);
   const json = chain.json;
   mark('版本链');
-  const username = (opts.username || config.username || 'Steve').slice(0, 16);
+  const username = safeUsername(opts.username);
   /* 无账户提醒：不阻断启动，但明确告诉玩家去创建账户 */
   if (!accountList().length) {
     logLine('[XLC] 你还没有创建账户，当前以「' + username + '」临时身份启动；到「账户」页添加玩家账号后可保存名称并自定义皮肤');
@@ -5351,6 +5881,23 @@ async function runLaunch(opts) {
     logLine('[launch] 补下缺失库: ' + d.name);
     try { await downloadTo(d.url, d.dest, d.sha1); }
     catch (e) { throw new Error('缺失库 ' + d.name + ' 且自动下载失败（' + e.message + '），请检查网络后重试'); }
+  }
+  /* 自愈：Fabric / Quilt 实例的 classpath 里必须有加载器本体 jar。 */
+  let ldrSelfHeal = false;
+  {
+    const ldr = await loaderJarFor(gd, json, versionId, chain.rootId);
+    if (ldr && !cpList.some(p => p === ldr.dest)) {
+      if (!fs.existsSync(ldr.dest)) {
+        logLine('[launch] 实例缺少 ' + ldr.art + ' 本体，按 ' + ldr.lv + ' 自动补下');
+        try { await downloadTo(ldr.base + ldr.rel, ldr.dest, null); }
+        catch (e) { throw new Error('缺少加载器 ' + ldr.art + ' ' + ldr.lv + '，自动下载失败（' + e.message + '）'); }
+      }
+      cpList.push(ldr.dest);
+      ldrSelfHeal = true;
+      const healMsg = '已把 ' + ldr.art + '-' + ldr.lv + '.jar 补进 classpath（该实例由旧版安装器创建，漏写了加载器本体；重装该版本可根治）';
+      logLine('[launch] ' + healMsg);
+      send('launch:log', '[XLC] ' + healMsg);
+    }
   }
   const missing = cpList.filter(p => !fs.existsSync(p));
   if (missing.length) throw new Error('缺少 ' + missing.length + ' 个库文件（如 ' + path.basename(missing[0]) + '），请重新安装该版本');
@@ -5492,6 +6039,11 @@ async function runLaunch(opts) {
   /* 干跑：测速用。走完整条准备链路后原地返回，不 spawn 游戏进程（也就不会真的开游戏）。 */
   if (LAUNCH_DRYRUN) {
     LAUNCHING = false;
+    /* 自测用：把最终 classpath 打出来，方便断言「实例缺的库到底有没有补进命令行」 */
+    if (process.env.XLC_LAUNCH_CP_DUMP) {
+      console.log('[LAUNCH-CP] ' + cpList.join('|'));
+      console.log('[LAUNCH-LDR] ' + (ldrSelfHeal ? 'self-healed' : 'ok'));
+    }
     send('launch:log', '[XLC] 干跑：准备完成，未启动游戏进程（仅测速）');
     return { dryRun: true, ms: Date.now() - T0, phase };
   }
@@ -8048,9 +8600,11 @@ async function pluginSelfTest() {
     'C47b 插件能打开「下载游戏」开关（下载恢复器的正路）', JSON.stringify(featOn.changed || featOn.error));
   ok(PLUGIN_CFG_PUSH.length > featPushBefore, 'C47c 改完给界面推了 plugin:cfg-changed（渲染层据此重画下载页）',
     featPushBefore + ' -> ' + PLUGIN_CFG_PUSH.length);
-  const featOff = pluginApiCall(TID, 'config.set', { key: 'features', value: { downloadGame: false, modpack: false } });
-  ok(featOff.ok && config.features.downloadGame === false && config.features.modpack === false,
-    'C47d 能整项写回（插件里的「还原成下架」）', JSON.stringify(featOff.changed || featOff.error));
+  /* 2.0.1 起「下载恢复器」只写 downloadGame：「还原」不能顺手把整合包开关一起抹掉 ——
+     对象项是按字段合并的（mode:'merge'），这里正是这条语义的守门断言。 */
+  const featOff = pluginApiCall(TID, 'config.set', { key: 'features', value: { downloadGame: false } });
+  ok(featOff.ok && config.features.downloadGame === false && config.features.modpack === true,
+    'C47d 只写 downloadGame 时不动整合包开关（按字段合并，不是整对象替换）', JSON.stringify(featOff.changed || featOff.error));
   /* 还原自测动过的配置项 */
   config.mem = cfgBackup.mem;
   config.gameArgs = cfgBackup.gameArgs;
@@ -10413,6 +10967,70 @@ function updateParserSelfTest() {
  * 已经发出去的老版本条目不要再动（用户看到的公告就是它，改了等于改写历史）。 */
 const CHANGELOG = [
   {
+    version: '1.4-snapshot2',
+    date: '2026-11-06',
+    tag: '快照版',
+    notice: '1.4 第二个快照：修几处会实际挡住用户的问题 —— 改中文名后账户列表被清空、下载停在 94% 不动、整合包装完却不在实例里、Fabric 实例一启动就报 ClassNotFoundException: KnotClient；同时接管系统代理，开着 Clash / v2ray 一类工具时下载不再"连得上但下不动"。',
+    groups: [
+      {
+        icon: 'i-user',
+        title: '修复 · 中文名让账户列表"全没了"',
+        items: [
+          '**账户其实没丢，是被画成了空列表**：添加账户被规则拒绝时，主进程返回里没有 `accounts` 字段，界面却无条件拿它重画 → `undefined` 被当成「一个账户都没有」，列表清成「还没有账户，先在上面添加一个」。重进账户页就恢复，所以看起来像"被隐藏"',
+          '**失败不再动列表**：`renderAccounts` 收到非数组直接原样不动；「添加」按钮失败只弹提示、不重画 —— 任何失败分支都不可能再抹掉已有账户',
+          '**玩家名规则收口**：设置页以前能存中文玩家名（无校验），写进配置后启动游戏会失败。现在主进程拒绝非法名并回 `usernameRejected`，界面明确提示「游戏不支持中文名」，输入框回填原值',
+          '**启动兜底**：配置里已经存了中文 / 带空格的历史玩家名时，启动自动退回当前账户名（再不行 Steve），不会拿着非法名去启动',
+          '账户页回归补 A18 系列 5 条断言（含真实走一遍"输入中文名 → 添加"）'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '修复 · 下载卡在 94%',
+        items: [
+          '**根因是"连接活着但不给数据"**：资源文件阶段是几千个小文件并发，某个连接卡死时既不报错也不断流，整个并发池会永远吊在等数据上 —— 进度就停在 94%（32% 依赖库 + 62% 资源文件 = 94%，还没进解压 natives）',
+          '**单连接停滞超时**：连续 25 秒收不到任何字节就主动掐断，标记为「连接停滞」而不是用户取消；原来只有全局超时，对"半死不活"的连接无效',
+          '**失败自动换源重试**：主源失败 → 备用源（官方 ↔ BMCLAPI 镜像）→ 再回主源，每个文件按 SHA1 校验，换源不影响正确性。原来一个文件失败就直接计入失败清单，整批不再尝试',
+          '**接管系统代理**：Node 的 fetch 不读系统代理，用户开着 Clash / v2ray 时浏览器能上网、启动器却全部超时。检测到代理（环境变量或 Windows 系统代理）后用 `https-proxy-agent` 接管全局 fetch，返回真正的 Response，流式下载 / 断点续传 / 停止全部照旧；本机地址始终直连，代理本身已失效（关了软件但系统代理还留着）时自动改直连重试一次',
+          '新增 `qa/e2e-dlretry.js`：本地"装死服务器"验证停滞超时、换源重试、SHA1 不符不落盘，11 条断言'
+        ]
+      },
+      {
+        icon: 'i-package',
+        title: '修复 · 整合包装完不在实例里',
+        items: [
+          '**整包改到实例目录**：以前 mods 与 overrides 全写进游戏根目录，实例既不被判为"隔离"，两个整合包还会互相覆盖 mods、存档配置全混在一起。现在装进 `versions/<实例>/` 并先建 `mods/`，自动隔离生效，进游戏就能看到模组',
+          '**overrides 同步落实例**：配置、资源包、脚本跟着实例走，不再污染游戏根目录',
+          '**不再需要插件才能用**：`features.modpack` 默认改为 true（老配置启动时自动迁移一次）—— 「下架」只针对下载游戏那四个分类，「整合包」分类与「导入整合包」按钮照常可用',
+          '**顺手挖出一个硬伤**：`installVanillaFiles` 从来不回传实例名，整合包安装拿到 `undefined` 去拼 `versions/<id>` 直接抛「path argument must be of type string」—— 也就是说原版装完那一步整合包必定失败。已补上返回值',
+          '**支持指定整合包版本**：`modrinth:install-modpack` 新增可选 `versionId`（界面仍默认最新，导入 / 手工调用可指定）',
+          '新增 `qa/e2e-modpack.js`：本地「假 Mojang」（版本清单 / 客户端 / 依赖库 / 空资源索引）+ 现场拼的真 `.mrpack`，全程离线几秒跑完 13 条断言 —— mods 与 overrides 落实例、根目录不再出现 mods、装完即判为隔离实例、存档目录落在实例内、同名重装被拦下'
+        ]
+      },
+      {
+        icon: 'i-gamepad',
+        title: '修复 · Fabric 实例一启动就崩（ClassNotFoundException: KnotClient）',
+        items: [
+          '**根因**：装 Fabric / Quilt 时只把 intermediary 和依赖库写进版本 json，漏了加载器本体 —— 元数据里它在 `loader.maven`，既不在 `loader.libraries`（那是它的依赖）也不在 `launcherMeta.libraries` 里。于是实例的 mainClass 指着 `KnotClient`，classpath 里却没有 `fabric-loader.jar`，游戏一启动就是 `ClassNotFoundException: net.fabricmc.loader.impl.launch.knot.KnotClient`',
+          '**装机修好**：安装流程补上加载器本体，新装的 Fabric / Quilt 实例直接能启动',
+          '**老实例不用重装**：启动时自检 classpath，缺加载器 jar 就按「版本名里的加载器版本 → 元数据最新版 → 本地下过的那一份」找回来（本地已有就直接挂上，不重复下载），并在日志里写清原因',
+          '上游对刚发布的快照常把 intermediary 回成 `0.0.0`（空映射）：实测**原版照常能进**，但依赖它的模组会崩 —— 装机时提示一句，免得装完一堆模组才发现',
+          '新增 `qa/e2e-fabriccp.js`：造一个「旧安装器产物」形状的实例，干跑整条启动准备链路，断言加载器确实被补进 classpath（8 条断言，离线十几秒）'
+        ]
+      },
+      {
+        icon: 'i-box',
+        title: '新增 · 补全文件（游戏设置 → 基础设置）',
+        items: [
+          '**对齐 PCL 的「补全文件」**：按版本 json 重新核对启动必需的文件 —— 客户端 jar、依赖库、资源索引与资源文件、natives、Fabric / Quilt 加载器本体，缺什么补什么',
+          '**只补不删**：MOD、存档、配置一概不碰，这个按钮只用来修「文件缺了起不来」；下载走当前下载源（官方 / BMCLAPI / 自定义）',
+          '**几秒扫完**：判定口径是「文件在不在 + 大小与 json 里写的一致」，不做全量哈希（几千个资源文件逐个算要好几分钟，而下载链路本身已经按 SHA1 校验）',
+          '**顺手治老实例**：Fabric / Quilt 实例若版本 json 里压根没有加载器记录（旧安装器产物），补完会把记录写回 json，下次启动不必再走启动时的自愈分支',
+          '新增 `qa/e2e-repair.js`：本地文件服务器 + 两个「文件被删」的实例，点真按钮走完 preload → IPC → 补全，9 条断言（缺 3 补 3、再点幂等、加载器只写回一次）'
+        ]
+      }
+    ]
+  },
+  {
     version: '1.4-snapshot1',
     date: '2026-11-04',
     tag: '快照版',
@@ -10431,12 +11049,13 @@ const CHANGELOG = [
       },
       {
         icon: 'i-download',
-        title: '插件 · 下载恢复器 2.0.0',
+        title: '插件 · 下载恢复器 2.0.1',
         items: [
-          '面板直接显示两项功能的当前状态（已恢复 / 已下架），不必去设置页翻',
+          '面板直接显示下载页当前状态（已恢复 / 已下架），不必去设置页翻',
           '「恢复下载页」与「还原成下架」各一个按钮，改完回启动器看下载页就已经生效',
-          '只申请 `control`（改这两项设置）与 `notify`（改完弹一句提示）两项权限，不写游戏目录、不碰账户与更新设置',
-          '插件包：`dist/XLC-Plugin-download-rescue-2.0.0.zip`（导入时记得勾选「读取并修改启动器的设置」）'
+          '**只管下载页**：整合包从这一版起默认开启（`features.modpack` 默认 true，老配置自动迁移一次），插件不再去动它 —— 不装插件也能用整合包与「导入整合包」',
+          '只申请 `control`（改这一项设置）与 `notify`（改完弹一句提示）两项权限，不写游戏目录、不碰账户与更新设置',
+          '插件包：`dist/XLC-Plugin-download-rescue-2.0.1.zip`（导入时记得勾选「读取并修改启动器的设置」）'
         ]
       },
       {
@@ -12269,10 +12888,19 @@ ipcMain.handle('config:save', (_e, patch) => {
   if (filtered.aiApi && typeof filtered.aiApi.key === 'string' && filtered.aiApi.key.startsWith(SECRET_MASK_PREFIX)) {
     filtered.aiApi = Object.assign({}, filtered.aiApi, { key: (config.aiApi && config.aiApi.key) || '' });
   }
+  /* 玩家名只收 ASCII：Minecraft 客户端启动时会校验离线用户名（[A-Za-z0-9_]{2,16}），
+     中文名传过去游戏直接拒绝启动 —— 以前这里不校验，设置页能存中文，白折腾一次。
+     非法值不写进配置（保留原值），回一个标记让渲染层提示，别静默吞掉。 */
+  let usernameRejected = false;
+  if (filtered.username !== undefined) {
+    const u = String(filtered.username || '').trim();
+    if (NAME_RE.test(u)) filtered.username = u;
+    else { delete filtered.username; usernameRejected = true; }
+  }
   config = Object.assign({}, config, filtered);
   if (filtered.backup) config.backup = SB_CORE.normalizeBackupCfg(config.backup);
   saveConfigNow();
-  return configPublic();
+  return usernameRejected ? Object.assign(configPublic(), { usernameRejected: true }) : configPublic();
 });
 
 /* ---------------- 好友系统（专属好友码） ----------------
@@ -12539,6 +13167,16 @@ ipcMain.handle('friends:signal-send', (_e, p) => {
 /* ---------------- 多账户（离线） ---------------- */
 const SKINS_DIR = path.join(DATA_DIR, 'skins');
 const NAME_RE = /^[A-Za-z0-9_]{2,16}$/;
+/* 启动用玩家名兜底：早期设置页不校验玩家名，配置里可能留着中文 / 带空格的非法值，
+   直接传给游戏会被客户端拒绝启动。非法就退到当前账户名，再不行 Steve。 */
+function safeUsername(override) {
+  for (const c of [override, config.username].map(v => String(v || '').trim())) {
+    if (c && NAME_RE.test(c)) return c;
+  }
+  const acc = accountList().find(a => a.name === config.activeAccount);
+  if (acc && NAME_RE.test(String(acc.name || ''))) return String(acc.name);
+  return 'Steve';
+}
 function accountList() { return Array.isArray(config.accounts) ? config.accounts : (config.accounts = []); }
 function activeName() { return config.activeAccount || config.username || 'Steve'; }
 /* 皮肤 PNG 校验：Minecraft 皮肤必须是 64x64 或 64x32 的 PNG */
@@ -12562,7 +13200,7 @@ function accountsOut() {
 ipcMain.handle('account:list', () => ({ ok: true, accounts: accountsOut(), active: activeName() }));
 ipcMain.handle('account:add', (_e, p) => {
   const name = String(p && p.name || '').trim();
-  if (!NAME_RE.test(name)) return { ok: false, error: '玩家名限 2-16 个字母/数字/下划线' };
+  if (!NAME_RE.test(name)) return { ok: false, error: '玩家名只支持 2-16 位字母、数字或下划线（不支持中文）' };
   const list = accountList();
   if (list.some(a => a.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: '该玩家名已存在' };
   const acc = { name, skin: null, model: 'classic' };
@@ -12589,7 +13227,7 @@ ipcMain.handle('account:rename', (_e, p) => {
   const acc = accountList().find(a => a.name === name);
   if (!acc) return { ok: false, error: '账户不存在' };
   if (acc.type && acc.type !== 'offline') return { ok: false, error: '在线账户的玩家名由认证服务器决定，不能在这里修改' };
-  if (!NAME_RE.test(to)) return { ok: false, error: '玩家名限 2-16 个字母/数字/下划线' };
+  if (!NAME_RE.test(to)) return { ok: false, error: '玩家名只支持 2-16 位字母、数字或下划线（不支持中文）' };
   if (to === name) return { ok: true, accounts: accountsOut(), active: activeName() };
   if (accountList().some(a => a !== acc && a.name.toLowerCase() === to.toLowerCase())) return { ok: false, error: '该玩家名已存在' };
   if (acc.skin) {

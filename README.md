@@ -20,7 +20,7 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 - **新功能投票**：侧边栏「新功能投票」页直接列出 GitHub 讨论区的功能投票，投票中的排在最前
 - **启动器更新**：检测新版本（GitHub 优先、官网兜底）、支持版本回退
 
-> 下载游戏与整合包在线安装暂未开放，后续版本会回归。
+> 整合包在线安装自 1.4-snapshot2 起默认开放；「下载页」（游戏本体）默认收起，装上 `XLC-Plugin-download-rescue-2.0.1.zip`（发行版附件）点一下即可放回，不用重启。
 
 ## 下载
 
@@ -28,7 +28,8 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 1.4-snapshot1 | `XLC-Launcher-1.4-snapshot1-portable.exe` | 快照版（最新）：功能开关搬进设置项，装上「下载恢复器」插件（`XLC-Plugin-download-rescue-2.0.0.zip`）就能把下架的下载页放回来 |
+| 1.4-snapshot2 | `XLC-Launcher-1.4-snapshot2-portable.exe` | 快照版（最新）：修中文名导致账户列表清空、下载卡 94%、整合包装不进实例、Fabric 实例缺加载器启动报 KnotClient；新增「补全文件」；接管系统代理。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4-snapshot1 | `XLC-Launcher-1.4-snapshot1-portable.exe` | 上一快照：功能开关搬进设置项，装上「下载恢复器」插件（`XLC-Plugin-download-rescue-2.0.0.zip`）就能把下架的下载页放回来 |
 | 1.3.1 | `XLC-Launcher-1.3.1-portable.exe` | 正式版，建议日常使用：默认皮肤换成游戏里真正的史蒂夫贴图 |
 | 1.3 | `XLC-Launcher-1.3-portable.exe` | 上一版正式版，需要回退时使用 |
 | 1.2 | `XLC-Launcher-1.2-portable.exe` | 更早的正式版 |

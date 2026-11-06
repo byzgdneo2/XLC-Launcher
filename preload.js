@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld('lmc', {
   exportOptions: (versionId) => ipcRenderer.invoke('modpack:export-options', versionId),
   importModpack: () => ipcRenderer.invoke('modpack:import'),
   versionInfo: (p) => ipcRenderer.invoke('version:info', p),
+  /* 补全文件（PCL「版本设置 → 补全文件」）：核对并补下缺失的启动文件，进度走 repair:progress */
+  instanceRepair: (p) => ipcRenderer.invoke('instance:repair', p),
   /* 实例级设置（PCL 式「版本设置」）：窗口标题 / 手动指定的 Java */
   versionSettingsSave: (p) => ipcRenderer.invoke('version:settings-save', p),
   versionPickJava: () => ipcRenderer.invoke('version:pick-java'),
@@ -70,6 +72,8 @@ contextBridge.exposeInMainWorld('lmc', {
   downloadCancel: (jobKey) => ipcRenderer.invoke('download:cancel', jobKey),
   /* 冒烟专用：主进程只在 LMC_SMOKE_DL=1 时注册，平时调会报无处理器 */
   smokeDownload: (p) => ipcRenderer.invoke('smoke:download', p),
+  /* 冒烟专用：主进程只在 LMC_SMOKE_MP=1 时注册，喂本地 .mrpack 走整合包安装链路 */
+  smokeMpLocal: (p) => ipcRenderer.invoke('smoke:mp-local', p),
   pickBg: () => ipcRenderer.invoke('personalize:pick-bg'),
   getBg: () => ipcRenderer.invoke('personalize:get-bg'),
   sysMem: (p) => ipcRenderer.invoke('sys:meminfo', p),
@@ -189,7 +193,7 @@ contextBridge.exposeInMainWorld('lmc', {
       'launch:log', 'launch:exit', 'launch:stage', 'mp:progress', 'win:maximized',
       'server:log', 'server:progress', 'server:state',
       'update:progress', 'update:available', 'account:ms-progress', 'plugin:cfg-changed',
-      'translator:progress', 'translator:drop',
+      'translator:progress', 'translator:drop', 'repair:progress',
       /* 内置插件「存档备份 / 模组清单对齐」的推送（自动备份完成 / 收到好友清单） */
       'backup:auto-done', 'modlist:received'
     ];
