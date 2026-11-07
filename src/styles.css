@@ -1530,3 +1530,76 @@ body.turbo *{ text-shadow:none !important; backdrop-filter:none !important; filt
 .vt-meta{ flex:none; font-size:11px; color:var(--tx3); min-width:62px; text-align:right; }
 .vt-empty{ padding:15px 18px; color:var(--tx3); font-size:12px; background:var(--card);
   border:1px solid var(--line); border-radius:var(--r-md); }
+
+/* ============================================================
+   账户设置：动作预览 + 皮肤库
+   ============================================================ */
+.acc-set-side{ width:140px; }
+.acc-set-side .acc-rig-wrap canvas{ width:140px; height:205px; }
+.acc-rig-wrap{
+  border-radius:12px;
+  background:radial-gradient(circle at 50% 26%, rgba(127,127,127,.18), rgba(127,127,127,.04) 70%);
+}
+.pose-row{ display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-top:8px; }
+.pose-btn{
+  font-size:11px; padding:4px 0; border-radius:7px; cursor:pointer; transition:.15s;
+  border:1px solid var(--line); background:var(--bg1); color:var(--tx2);
+}
+.pose-btn:hover{ border-color:var(--acc2); color:var(--acc2); }
+.pose-btn.on{ background:var(--acc); border-color:var(--acc); color:#fff; font-weight:700; }
+.acc-set-sub{ font-style:normal; font-size:11px; font-weight:400; color:var(--tx3); margin-left:auto; }
+.skin-lib{
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:8px;
+  max-height:200px; overflow:auto; padding:2px;
+}
+.skin-cell{
+  position:relative; border:1px solid var(--line); border-radius:10px; padding:6px 4px 5px;
+  text-align:center; cursor:pointer; background:var(--bg1); transition:.15s;
+  min-width:0;   /* 网格项默认 min-width:auto，长名字会把轨道顶宽、省略号也就失效了 */
+}
+.skin-cell:hover{ border-color:var(--acc2); transform:translateY(-1px); }
+.skin-cell.cur{ border-color:var(--acc2); box-shadow:0 0 0 1px var(--acc2) inset; }
+.skin-cell-head{
+  width:44px; height:44px; display:block; margin:0 auto; image-rendering:pixelated;
+  border-radius:6px; background:rgba(127,127,127,.12);
+}
+.skin-cell-n{ font-size:10.5px; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.skin-cell-m{ font-size:9.5px; color:var(--tx3); }
+.skin-cell-del{
+  position:absolute; top:2px; right:2px; width:15px; height:15px; line-height:13px; padding:0;
+  border-radius:50%; border:none; background:rgba(0,0,0,.38); color:#fff; cursor:pointer;
+  font-size:12px; opacity:0; transition:.15s;
+}
+.skin-cell:hover .skin-cell-del{ opacity:1; }
+.skin-lib-bar{ display:flex; gap:6px; margin-top:8px; }
+.skin-lib-url{ display:flex; gap:6px; margin-top:6px; }
+.skin-lib-url input{
+  flex:1; min-width:0; background:var(--bg1); border:1px solid var(--line);
+  border-radius:8px; padding:6px 9px; color:var(--tx); font-size:11.5px;
+}
+.btn.sm{ padding:4px 10px; font-size:11.5px; }
+
+/* ============================================================
+   下载页：皮肤分类
+   ============================================================ */
+.skin-hot{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:8px 0 10px; }
+.skin-hot-t{ font-size:11.5px; color:var(--tx3); }
+.chip{
+  font-size:11.5px; padding:3px 10px; border-radius:99px; cursor:pointer;
+  border:1px solid var(--line); background:var(--bg1); color:var(--tx2);
+}
+.chip:hover{ border-color:var(--acc2); color:var(--acc2); }
+.skin-card{
+  display:flex; gap:16px; align-items:center; border:1px solid var(--line);
+  border-radius:var(--r-md); padding:14px 16px; background:var(--bg1);
+}
+.skin-card-rig{
+  width:130px; height:191px; flex:none; image-rendering:pixelated;
+  border-radius:10px; background:rgba(127,127,127,.1);
+}
+.skin-card-body{ min-width:0; }
+.skin-card-t{ display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:6px; }
+.skin-card-m{ font-size:11.5px; color:var(--tx2); word-break:break-all; }
+.skin-card-note{ font-size:11px; color:var(--tx3); margin-top:3px; }
+.skin-card .btn-row{ margin-top:10px; }
+.skin-card-tip{ font-size:11px; color:var(--tx3); margin-top:8px; }

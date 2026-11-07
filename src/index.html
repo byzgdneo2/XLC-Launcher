@@ -244,6 +244,7 @@
           <button class="tab" data-cat="shader">光影</button>
           <button class="tab" data-cat="datapack">数据包</button>
           <button class="tab" data-cat="world">世界</button>
+          <button class="tab" data-cat="skin">皮肤</button>
         </div>
         <div class="ver-list" id="verList"><div class="empty-sm">加载版本清单中…</div></div>
         <div id="resArea" style="display:none">
@@ -329,6 +330,18 @@
           <div id="spHint" class="warnbar tip res-note" style="display:none"></div>
           <div class="ver-list" id="spList"><div class="empty-sm">加载中…</div></div>
           <div class="pager" id="spPager"></div>
+        </div>
+        <div id="skArea" style="display:none">
+          <div class="dl-res-head">
+            <div class="searchbox">
+              <svg class="ic sm"><use href="#i-search"/></svg>
+              <input type="text" id="skSearch" placeholder="输入正版玩家名，抓他的皮肤（如 Notch）…">
+            </div>
+            <button class="btn primary" id="skGo"><svg class="ic sm"><use href="#i-download"/></svg> 查找皮肤</button>
+          </div>
+          <div class="res-note">按玩家名查 <b>Mojang 官方档案</b>（名字 → UUID → 档案 → 皮肤直链），抓到的皮肤先进 <b>皮肤库</b>，再套给离线账户。正版 / 外置登录账户的皮肤由认证服务器提供，本地皮肤对它们不生效。</div>
+          <div class="skin-hot" id="skHot"></div>
+          <div id="skResult"><div class="empty-sm">输入一个正版玩家名开始，或点上面的推荐</div></div>
         </div>
       </section>
 

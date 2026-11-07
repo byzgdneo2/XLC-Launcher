@@ -1612,7 +1612,8 @@ const DL_HEAD = {
   resourcepack: ['下载资源包', '搜索资源包并装入游戏目录的 <b>resourcepacks</b>'],
   shader: ['下载光影', '从 <b>Modrinth</b> / <b>CurseForge</b> 搜索光影包，装进 <b>shaderpacks</b> 目录，游戏内用 <b>Iris / OptiFine</b> 选中即可生效'],
   datapack: ['下载数据包', '搜索数据包并装入指定存档的 <b>datapacks</b> 文件夹（进入世界后自动生效）'],
-  world: ['下载世界', '从 <b>CurseForge</b> 搜索现成的世界存档，一键装进游戏目录的 <b>saves</b>，进游戏「单人游戏」即可打开']
+  world: ['下载世界', '从 <b>CurseForge</b> 搜索现成的世界存档，一键装进游戏目录的 <b>saves</b>，进游戏「单人游戏」即可打开'],
+  skin: ['下载皮肤', '按正版玩家名查 <b>Mojang 官方档案</b>，把皮肤存进<b>皮肤库</b>，再套给离线账户']
 };
 function updateDlHead(cat) {
   const h = DL_HEAD[cat] || DL_HEAD.release;
@@ -1648,6 +1649,11 @@ $$('#dlTabs .tab').forEach(t => t.addEventListener('click', () => {
   }
 }));
 window.addEventListener('resize', () => moveTabInd($('#dlTabs')));
+/* 皮肤分类：按钮 / 回车触发查询，推荐词先渲染好（点一下直接查某个玩家） */
+if ($('#skGo')) $('#skGo').addEventListener('click', () => skinPage.search());
+if ($('#skSearch')) $('#skSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') skinPage.search(); });
+/* skHotRender 的调用不能放在这里：SK_HOT 是后面才初始化的 const（TDZ），
+   顶层提前调用会抛 ReferenceError 打断整页脚本（与下方 DL_RES_TABS 注释同理）。 */
 $('#verSearch').addEventListener('input', () => { dlQuery = $('#verSearch').value.trim().toLowerCase(); renderVersionList(); });
 /* 功能临时下架的 active 迁移**不在**这里做：click handler 内部引用了后面才定义的
    DL_RES_TABS（const，TDZ），提前 click 会抛 ReferenceError 把 handler 与后续顶层初始化打断。
@@ -1763,6 +1769,8 @@ function openModal(maskClose) {
   modalMask.style.display = 'flex';
 }
 function closeModal() {
+  /* 动作预览的 rAF 循环：弹窗一关就停，别在后台空转（账户设置里那个 canvas 会一直转） */
+  try { if (typeof skinRigStop === 'function') skinRigStop(); } catch (_) {}
   if (!modalMask || modalMask.style.display === 'none' || modalClosing) return;
   modalClosing = true;
   modalMask.classList.add('closing');
@@ -2929,6 +2937,82 @@ const spPage = setupResPage({ type: 'shader', search: '#spSearch', list: '#spLis
 const dpPage = setupResPage({ type: 'datapack', search: '#dpSearch', list: '#dpList', pager: '#dpPager', targetSel: '#dpWorld', targetType: 'world' });
 /* 世界（存档）只有 CurseForge 一个源 —— Modrinth 没有 world 项目类型，所以不给源切换按钮 */
 const wdPage = setupResPage({ type: 'world', search: '#wdSearch', list: '#wdList', pager: '#wdPager', targetSel: '#wdTarget', targetType: 'version', source: 'curseforge' });
+/* ---------------- 下载页「皮肤」----------------
+ * 数据源只用 Mojang 官方档案：名字 → UUID → profile → textures.SKIN → PNG。
+ * 为什么不接"皮肤画廊"：现成的皮肤站（NameMC / The Skindex / LittleSkin）都没有稳定公开的
+ * 搜索接口，抓 HTML 随时会碎；与其塞一堆今天通明天不通的第三方接口，不如把
+ * 「按名字抓一张」这条最硬的路径做稳，再配合本地上传 / 直链导入，够日常换了。
+ */
+const SK_HOT = ['Notch', 'jeb_', 'Dinnerbone', 'Grumm', 'Deadmau5', 'CaptainSparklez'];
+const skinPage = {
+  loaded: false,
+  search(name) {
+    const v = String(name || ($('#skSearch') && $('#skSearch').value) || '').trim();
+    skLookup(v);
+  }
+};
+function skHotRender() {
+  const box = $('#skHot');
+  if (!box) return;
+  box.innerHTML = '<span class="skin-hot-t">推荐</span>' +
+    SK_HOT.map(n => '<button class="chip" data-n="' + n + '">' + n + '</button>').join('');
+  $$('#skHot .chip').forEach(b => b.addEventListener('click', () => {
+    if ($('#skSearch')) $('#skSearch').value = b.dataset.n;
+    skLookup(b.dataset.n);
+  }));
+}
+async function skLookup(name) {
+  const box = $('#skResult');
+  if (!box) return;
+  if (!name) { box.innerHTML = '<div class="empty-sm">先输入一个正版玩家名</div>'; return; }
+  box.innerHTML = '<div class="empty-sm">正在向 Mojang 查询「' + esc(name) + '」…</div>';
+  const r = await window.lmc.skinLookup({ name });
+  if (!r || !r.ok) {
+    box.innerHTML = '<div class="empty-sm">' + esc((r && r.error) || '获取失败') +
+      (r && r.notFound ? '<br><span style="font-size:11px">正版里没有这个名字（离线账户没有公开皮肤）</span>' : '') + '</div>';
+    return;
+  }
+  const kb = Math.max(1, Math.round((r.size || 0) / 1024 * 10) / 10);
+  box.innerHTML =
+    '<div class="skin-card">' +
+      '<canvas class="skin-card-rig" width="180" height="264"></canvas>' +
+      '<div class="skin-card-body">' +
+        '<div class="skin-card-t"><b>' + esc(r.name) + '</b>' +
+          '<span class="pill ' + (r.model === 'slim' ? 'snapshot' : 'release') + '">' +
+          (r.model === 'slim' ? '苗条 (Alex)' : '经典 (Steve)') + '</span></div>' +
+        '<div class="skin-card-m">UUID ' + esc(String(r.uuid || '').slice(0, 32)) + ' · 皮肤 ' + kb + ' KB</div>' +
+        '<div class="skin-card-note">来自 Mojang 官方档案，点按钮才会下载并保存</div>' +
+        '<div class="btn-row">' +
+          '<button class="btn primary" id="skSave"><svg class="ic sm"><use href="#i-download"/></svg> 存到皮肤库</button>' +
+          '<button class="btn ghost" id="skUse">套用到当前账户</button>' +
+        '</div>' +
+        '<div class="skin-card-tip">套用只对<b>离线账户</b>有效；正版 / 外置登录账户的皮肤由认证服务器提供。</div>' +
+      '</div>' +
+    '</div>';
+  const cv = box.querySelector('.skin-card-rig');
+  paintSkinRig(cv, r.png, 'idle', 0.6, r.model);
+  const save = async (apply) => {
+    const add = await window.lmc.skinLibAddPng({ dataUrl: r.png, name: r.name, model: r.model, source: 'mojang' });
+    if (!add || !add.ok) { toast((add && add.error) || '保存失败', 'error'); return; }
+    if (!apply) { toast('已存到皮肤库：' + r.name); return; }
+    const acc = S.accActive || (S.config && S.config.activeAccount) || '';
+    if (!acc) { toast('还没有账户，先去「账户」页建一个离线账户', 'warn'); return; }
+    const rec = (S.accounts || []).find(x => x.name === acc);
+    if (rec && (rec.type === 'ms' || rec.type === 'authlib')) {
+      toast('在线账户的皮肤由认证服务器提供，套用本地皮肤不会生效', 'warn');
+      return;
+    }
+    const ap = await window.lmc.skinLibApply({ account: acc, file: add.file, model: r.model });
+    if (!ap || !ap.ok) { toast((ap && ap.error) || '套用失败', 'error'); return; }
+    applyAccounts(ap, '已把「' + r.name + '」套到 ' + acc + '（启动游戏后生效）');
+    toast('已套用给 ' + acc);
+  };
+  const bs = box.querySelector('#skSave'), bu = box.querySelector('#skUse');
+  if (bs) bs.addEventListener('click', () => save(false));
+  if (bu) bu.addEventListener('click', () => save(true));
+}
+/* 推荐词 chips：放在 SK_HOT / skHotRender 定义之后（顶层提前调用会 TDZ，见 skGo 接线处注释） */
+skHotRender();
 /* 下载页资源类 tab → 区块/工厂实例映射 */
 const DL_RES_TABS = {
   mod: { area: 'resArea', page: () => modPage },
@@ -2936,7 +3020,8 @@ const DL_RES_TABS = {
   resourcepack: { area: 'rpArea', page: () => rpPage },
   shader: { area: 'spArea', page: () => spPage },
   datapack: { area: 'dpArea', page: () => dpPage },
-  world: { area: 'wdArea', page: () => wdPage }
+  world: { area: 'wdArea', page: () => wdPage },
+  skin: { area: 'skArea', page: () => skinPage }
 };
 function fmtNum(n) {
   n = Number(n) || 0;
@@ -4749,6 +4834,264 @@ function paintSkinPreview(cv, dataUrl) {
   };
   img.src = dataUrl || DEFAULT_SKIN_URL;
 }
+/* ---------------- 皮肤「动作预览」（账户设置 / 皮肤库共用） ----------------
+ * 为什么手写 2D 骨架、不引 3D 模型：皮肤本身就是一张 64×64 贴图，预览区只有 180×270；
+ * 把四肢当成贴着关节旋转的矩形、从贴图上取正面的 UV，就足够表达「站立 / 行走 / 奔跑 /
+ * 潜行 / 持物 / 穿甲」，零依赖、离线可用，也不用为几 MB 的模型再开一条下载。
+ * UV 沿用 paintSkinPreview 那一套：头 8,8 · 帽子 40,8 · 身 20,20 · 右臂 44,20 ·
+ * 左臂 36,52 · 右腿 4,20 · 左腿 20,52；第二层（外套/帽子）在 y+16 那一排。 */
+const SKIN_POSES = [
+  { k: 'idle', t: '站立' },
+  { k: 'walk', t: '行走' },
+  { k: 'run', t: '奔跑' },
+  { k: 'sneak', t: '潜行' },
+  { k: 'hold', t: '持物' },
+  { k: 'armor', t: '穿甲' }
+];
+const SKIN_IMG_CACHE = new Map();
+/* 同一张皮肤被反复要求绘制（滑动帧 / 多个缩略图）时只解码一次 */
+function skinImage(dataUrl, cb) {
+  const key = dataUrl || '__default__';
+  const hit = SKIN_IMG_CACHE.get(key);
+  if (hit && hit.ok) { cb(hit.img); return; }
+  if (hit && hit.pending) { hit.cbs.push(cb); return; }
+  const rec = { ok: false, pending: true, cbs: [cb], img: new Image() };
+  SKIN_IMG_CACHE.set(key, rec);
+  rec.img.onload = () => {
+    rec.ok = true; rec.pending = false;
+    rec.cbs.splice(0).forEach(f => { try { f(rec.img); } catch (_) {} });
+  };
+  rec.img.onerror = () => {
+    rec.pending = false;
+    SKIN_IMG_CACHE.delete(key);
+    rec.cbs.splice(0).forEach(f => { try { f(null); } catch (_) {} });
+  };
+  rec.img.src = key === '__default__' ? DEFAULT_SKIN_URL : key;
+}
+/* 头像小图（皮肤库缩略图 / 下载页结果）：只取脸 + 帽子层，比缩整张贴图好认 */
+function drawSkinHead(cv, dataUrl) {
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  skinImage(dataUrl, (img) => {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!img) return;
+    ctx.drawImage(img, 8, 8, 8, 8, 0, 0, cv.width, cv.height);
+    ctx.drawImage(img, 40, 8, 8, 8, 0, 0, cv.width, cv.height);
+  });
+}
+function paintSkinRig(cv, dataUrl, pose, phase, model) {
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const go = (img) => {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!img) return;
+    rigDraw(ctx, cv, img, pose || 'idle', Number(phase) || 0, model === 'slim' ? 'slim' : 'classic');
+  };
+  skinImage(dataUrl, (img) => {
+    if (img) return go(img);
+    /* 贴图读不到：退回内置史蒂夫，别留一块空白 */
+    skinImage(null, go);
+  });
+}
+/* 一顶"铁头盔"式的贴片：渐变 + 描边，够看出是盔甲，又不会喧宾夺主 */
+function rigPlate(ctx, x, y, w, h, r) {
+  const g = ctx.createLinearGradient(x, y, x + w * 0.4, y + h);
+  g.addColorStop(0, '#e8eef5');
+  g.addColorStop(0.45, '#a9b6c4');
+  g.addColorStop(1, '#6d7a88');
+  ctx.fillStyle = g;
+  ctx.strokeStyle = 'rgba(40,50,62,.65)';
+  ctx.lineWidth = Math.max(1, r * 0.35);
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+function rigItemCube(ctx, x, y, s) {
+  /* 一个方块（草方块配色）：顶面亮、左侧面中、右侧面暗 —— 一眼就是"手里拿着东西" */
+  const h = s * 0.5, d = s * 0.28;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.beginPath();                       /* 顶面 */
+  ctx.moveTo(0, -d); ctx.lineTo(h, -d - h * 0.55); ctx.lineTo(s, -d); ctx.lineTo(h, -d + h * 0.55);
+  ctx.closePath();
+  ctx.fillStyle = '#6bbf59'; ctx.fill();
+  ctx.beginPath();                       /* 左面 */
+  ctx.moveTo(0, -d); ctx.lineTo(h, -d + h * 0.55); ctx.lineTo(h, h * 0.55 + s * 0.5); ctx.lineTo(0, s * 0.5 - d + d);
+  ctx.closePath();
+  ctx.fillStyle = '#8a5a2b'; ctx.fill();
+  ctx.beginPath();                       /* 右面 */
+  ctx.moveTo(s, -d); ctx.lineTo(h, -d + h * 0.55); ctx.lineTo(h, h * 0.55 + s * 0.5); ctx.lineTo(s, s * 0.5 - d);
+  ctx.closePath();
+  ctx.fillStyle = '#5e3c1c'; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(h, -d + h * 0.55); ctx.lineTo(h, h * 0.55 + s * 0.5); ctx.stroke();
+  ctx.restore();
+}
+function rigDraw(ctx, cv, img, pose, phase, model) {
+  const W = cv.width, H = cv.height;
+  const slim = model === 'slim';
+  const armW = slim ? 3 : 4;
+  const U = Math.min(W / 18, H / 34);          /* 1 皮肤像素 = U 画布像素 */
+  const cx = W / 2;
+  const legacy = img.width === 64 && img.height === 32;    /* 旧版 64×32：左右肢共用一张 UV */
+  const bobMap = {
+    /* 走路/奔跑：抬腿那半个周期身体略上浮（原来反相了，脚抬起来人反而下沉） */
+    idle: Math.sin(phase) * 0.6, walk: -Math.abs(Math.sin(phase)) * 0.7,
+    run: -Math.abs(Math.sin(phase)) * 1.4, sneak: 2.8,
+    hold: Math.sin(phase) * 0.5, armor: Math.sin(phase) * 0.5
+  };
+  const bob = bobMap[pose] === undefined ? 0 : bobMap[pose];
+  const topY = (H - 32 * U) / 2 + bob * U;
+  const X = (v) => cx + v * U;
+  const Y = (v) => topY + v * U;
+
+  const sw = Math.sin(phase);
+  let armA = 0.05 * Math.sin(phase);
+  /* 正面视角里"四肢前后摆"不能用绕髋/绕肩横摆来表达 —— 那会读成两腿交叉成一坨、双臂向外张开。
+     正确画法是 2D 像素游戏的走路套路：交替抬脚 + 手臂长度交替 + 身体上下起伏。 */
+  let footR = 0, footL = 0;                 /* 收起的腿抬多高（皮肤像素） */
+  let outR = 0, outL = 0;                   /* 迈出去的腿往外挪多少 */
+  let legTiltR = 0, legTiltL = 0;
+  let armLenR = 12, armLenL = 12;
+  let armAngR = armA, armAngL = -armA;
+  if (pose === 'walk' || pose === 'run') {
+    /* 正面视角没有景深，前后交替只能靠"一腿外迈 / 一腿收起"表达：
+       迈出去的腿往外挪、踩实；另一条腿收回上提。手臂与对侧腿同相（右腿前 → 左臂前摆）。 */
+    const k = pose === 'run' ? 1.55 : 1;
+    const kOut = pose === 'run' ? 1.15 : 1;      /* 外移别跟着幅度等比放大，否则腿会跑到身体外面 */
+    const fR = Math.max(0, sw), fL = Math.max(0, -sw);
+    outR = 0.45 + fR * 1.9 * kOut; outL = -0.45 - fL * 1.9 * kOut;
+    footR = fL * 3.2 * k; footL = fR * 3.2 * k;
+    legTiltR = -fR * 0.08 * kOut + fL * 0.05 * k;
+    legTiltL = fL * 0.08 * kOut - fR * 0.05 * k;
+    /* 别缩太多：缩 3U 以上手部贴图整段被切掉，看着像没有手 */
+    armLenR = 12 - fL * 2.0 * k; armLenL = 12 - fR * 2.0 * k;
+  }
+  /* 缩短的手臂顺带内收一点（"往前伸"的透视），否则只是变短会像被截断 */
+  armAngR = armA + (12 - armLenR) * 0.085;
+  armAngL = -armA - (12 - armLenL) * 0.085;
+  if (pose === 'sneak') { legTiltR = -0.09; legTiltL = 0.09; armAngR = 0.10; armAngL = -0.10; }
+  if (pose === 'hold') { /* 手臂角度在下面单独走缩短分支 */ }
+
+  /* 脚下阴影：没有它，人像是浮在卡片中间 */
+  const shW = 20 * U, shH = 4.2 * U;
+  const sg = ctx.createRadialGradient(cx, Y(32.4), 0, cx, Y(32.4), shW / 2);
+  sg.addColorStop(0, 'rgba(0,0,0,.34)');
+  sg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sg;
+  ctx.save();
+  ctx.translate(cx, Y(32.4));
+  ctx.scale(1, shH / shW);
+  ctx.beginPath(); ctx.arc(0, 0, shW / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  /* 腿：髋部为轴心，左右各 4 宽 */
+  const legTexR = [4, 20, 4, 12], legTexL = legacy ? [4, 20, 4, 12] : [20, 52, 4, 12];
+  const limb = (tex, w, h, px, py, angle) => {
+    ctx.save();
+    ctx.translate(px, py);
+    if (angle) ctx.rotate(angle);
+    ctx.drawImage(img, tex[0], tex[1], tex[2], tex[3], -w * U / 2, 0, w * U, h * U);
+    ctx.restore();
+  };
+  const legH = pose === 'sneak' ? 10.5 : 12;
+  /* 抬脚 = 整条腿（含裤腿 overlay）沿 Y 上移，顶端多出来的那截正好被身体盖住；
+     长度不缩，避免看起来像腿被截断 */
+  const legYR = Y(20 - footR), legYL = Y(20 - footL);
+  const legXR = X(2 + outR), legXL = X(-2 + outL);
+  limb(legTexL, 4, legH, legXL, legYL, legTiltL);
+  limb(legTexR, 4, legH, legXR, legYR, legTiltR);
+  if (!legacy) {
+    limb([4, 48, 4, 12], 4, legH, legXL, legYL, legTiltL);
+    limb([4, 32, 4, 12], 4, legH, legXR, legYR, legTiltR);
+  }
+
+  /* 身体 */
+  ctx.drawImage(img, 20, 20, 8, 12, X(-4), Y(8), 8 * U, 12 * U);
+  if (!legacy) ctx.drawImage(img, 20, 36, 8, 12, X(-4), Y(8), 8 * U, 12 * U);
+
+  /* 手臂：肩部为轴心 */
+  const shoulderY = Y(9);
+  const armRX = X(4 + armW / 2), armLX = X(-4 - armW / 2);
+  const armTexR = [44, 20, armW, 12], armTexL = legacy ? [44, 20, armW, 12] : [36, 52, armW, 12];
+  if (pose === 'hold') {
+    /* 持物：正面视角下"手往前伸"= 手臂缩短 + 略向内收，两只手在胸前托住方块。
+       （以前是整条手臂绕肩外旋 1.12 rad，手跑到画布外，方块跟着全在可视区外，看着就是空举双手） */
+    const hl = 7.6;
+    limb(armTexR, armW, hl, armRX, shoulderY, 0.30);
+    if (!legacy) limb([44, 36, armW, 12], armW, hl, armRX, shoulderY, 0.30);
+    limb(armTexL, armW, hl, armLX, shoulderY, -0.30);
+    if (!legacy) limb([52, 52, armW, 12], armW, hl, armLX, shoulderY, -0.30);
+  } else {
+    limb(armTexR, armW, armLenR, armRX, shoulderY, armAngR);
+    if (!legacy) limb([44, 36, armW, 12], armW, armLenR, armRX, shoulderY, armAngR);
+    limb(armTexL, armW, armLenL, armLX, shoulderY, armAngL);
+    if (!legacy) limb([52, 52, armW, 12], armW, armLenL, armLX, shoulderY, armAngL);
+  }
+
+  /* 头（潜行时整体前倾一点，做出"弓着身子"的意思） */
+  const headDX = pose === 'sneak' ? 1.2 : 0;
+  ctx.drawImage(img, 8, 8, 8, 8, X(-4 + headDX), Y(0), 8 * U, 8 * U);
+  if (!legacy) ctx.drawImage(img, 40, 8, 8, 8, X(-4 + headDX), Y(0), 8 * U, 8 * U);
+
+  /* 持物：方块端在胸前，两只手正好搭在它两侧（与上面缩短的手臂对齐） */
+  if (pose === 'hold') {
+    rigItemCube(ctx, X(-2.4), Y(12.1), 4.8 * U);
+  }
+
+  /* 穿甲：头盔 / 胸甲 / 护肩 / 护腿 / 靴 */
+  if (pose === 'armor') {
+    ctx.save();
+    ctx.globalAlpha = 0.94;
+    rigPlate(ctx, X(-4.6 + headDX), Y(-0.6), 9.2 * U, 6.4 * U, 2.2 * U);
+    ctx.clearRect(X(-3.4 + headDX), Y(3.1), 1.9 * U, 1.5 * U);   /* 眼缝 */
+    ctx.clearRect(X(1.5 + headDX), Y(3.1), 1.9 * U, 1.5 * U);
+    rigPlate(ctx, X(-4.2), Y(8.2), 8.4 * U, 8.6 * U, 1.8 * U);
+    rigPlate(ctx, X(3.4), Y(7.8), 3.6 * U, 3.6 * U, 1.4 * U);
+    rigPlate(ctx, X(-7), Y(7.8), 3.6 * U, 3.6 * U, 1.4 * U);
+    rigPlate(ctx, X(-4.2), Y(23), 3.7 * U, 7.2 * U, 1.2 * U);
+    rigPlate(ctx, X(0.5), Y(23), 3.7 * U, 7.2 * U, 1.2 * U);
+    rigPlate(ctx, X(-4.4), Y(30), 4.1 * U, 2.4 * U, 0.8 * U);
+    rigPlate(ctx, X(0.3), Y(30), 4.1 * U, 2.4 * U, 0.8 * U);
+    ctx.restore();
+  }
+}
+/* 动作预览的动画驱动：只有面板还挂在文档里才继续跑（关掉弹窗立刻停，别在后台空转） */
+const SKIN_RIG = { raf: 0, cv: null, get: null, phase: 0, last: 0 };
+function skinRigStop() {
+  if (SKIN_RIG.raf) { try { cancelAnimationFrame(SKIN_RIG.raf); } catch (_) {} }
+  SKIN_RIG.raf = 0; SKIN_RIG.cv = null; SKIN_RIG.get = null;
+}
+function skinRigStart(cv, get) {
+  skinRigStop();
+  if (!cv) return;
+  SKIN_RIG.cv = cv; SKIN_RIG.get = get; SKIN_RIG.phase = 0; SKIN_RIG.last = 0;
+  const loop = (t) => {
+    const canvas = SKIN_RIG.cv;
+    if (!canvas || !canvas.isConnected || !SKIN_RIG.get) { skinRigStop(); return; }
+    const dt = SKIN_RIG.last ? Math.min(80, t - SKIN_RIG.last) : 16;
+    SKIN_RIG.last = t;
+    let st = null;
+    try { st = SKIN_RIG.get(); } catch (_) {}
+    if (!st) { skinRigStop(); return; }
+    const speed = st.pose === 'run' ? 0.0105 : st.pose === 'walk' ? 0.0068 : 0.0021;
+    SKIN_RIG.phase = (SKIN_RIG.phase + dt * speed) % (Math.PI * 2);
+    paintSkinRig(canvas, st.dataUrl, st.pose, SKIN_RIG.phase, st.model);
+    SKIN_RIG.raf = requestAnimationFrame(loop);
+  };
+  SKIN_RIG.raf = requestAnimationFrame(loop);
+}
 function renderAccounts(accounts, active) {
   const box = $('#accList');
   /* 防御：IPC 失败时 accounts 可能是 undefined（例如 account:add 被规则拒绝，返回里没有 accounts）。
@@ -4827,6 +5170,7 @@ function renderAccounts(accounts, active) {
  * 每次改动后走 applyAccounts（列表 + 主页头像一起刷新）再 paint() 重画弹窗，弹窗始终显示最新状态。 */
 function openAccountSettings(name) {
   let cur = String(name || '');
+  let poseCur = 'idle';          /* 动作预览当前选中项（弹窗重绘后保持） */
   const accOf = () => (S.accounts || []).find(x => x.name === cur);
 
   function paint() {
@@ -4867,16 +5211,33 @@ function openAccountSettings(name) {
         '</div>' +
         '<p class="hint">只改启动器里这个账户的名字，不影响任何正版账号；它的皮肤文件会跟着一起改名。</p>';
 
+    /* 在线账户的皮肤库没有意义（套用会被拦），干脆不显示 —— 少一块会让人白点的区域 */
+    const libSec = online ? '' :
+      '<div class="acc-set-sec"><div class="acc-set-h"><svg class="ic sm"><use href="#i-user"/></svg> 皮肤库 <i class="acc-set-sub">点一下套给这个账户</i></div>' +
+        '<div class="skin-lib" id="accSkinLib"><div class="empty-sm">读取皮肤库…</div></div>' +
+        '<div class="skin-lib-bar">' +
+          '<button class="btn ghost sm" id="accLibImport">导入文件</button>' +
+          '<button class="btn ghost sm" id="accLibRefresh">刷新</button>' +
+        '</div>' +
+        '<div class="skin-lib-url"><input id="accLibUrlInput" placeholder="或粘贴皮肤图片直链（https://….png）"><button class="btn ghost sm" id="accLibUrl">添加</button></div>' +
+      '</div>';
+
+    const poseName = (SKIN_POSES.find(x => x.k === poseCur) || SKIN_POSES[0]).t;
     modalBox.innerHTML =
       '<h3><svg class="ic sm"><use href="#i-user"/></svg> 账户设置 · <b>' + esc(a.name) + '</b></h3>' +
       '<div class="mmeta">' + typeTxt + (isCur ? ' · 当前正在使用的账户' : '') + '</div>' +
       '<div class="acc-set">' +
         '<div class="acc-set-side">' +
-          '<canvas id="accSetSkin" width="160" height="320"></canvas>' +
-          '<div class="acc-set-cap">' + (a.skin ? '自定义皮肤' : '默认皮肤（游戏自动分配）') + '</div>' +
+          '<div class="acc-rig-wrap"><canvas id="accSetSkin" width="180" height="264"></canvas></div>' +
+          '<div class="pose-row" id="accSetPoses">' +
+            SKIN_POSES.map(x => '<button class="pose-btn' + (x.k === poseCur ? ' on' : '') + '" data-pose="' + x.k + '">' + x.t + '</button>').join('') +
+          '</div>' +
+          '<div class="acc-set-cap">' + (a.skin ? '自定义皮肤' : '默认皮肤（游戏自动分配）') +
+            ' · <span id="accPoseName">' + poseName + '</span></div>' +
         '</div>' +
         '<div class="acc-set-body">' +
           '<div class="acc-set-sec"><div class="acc-set-h"><svg class="ic sm"><use href="#i-user-check"/></svg> 皮肤</div>' + skinSec + '</div>' +
+          libSec +
           '<div class="acc-set-sec"><div class="acc-set-h"><svg class="ic sm"><use href="#i-user"/></svg> 皮肤模型</div>' + modelSec + '</div>' +
           '<div class="acc-set-sec"><div class="acc-set-h"><svg class="ic sm"><use href="#i-user-plus"/></svg> 玩家名</div>' + nameSec + '</div>' +
         '</div>' +
@@ -4885,9 +5246,97 @@ function openAccountSettings(name) {
         '<button class="btn ghost" id="accSetClose">关闭</button>' +
         (isCur ? '' : '<button class="btn primary" id="accSetUse">设为当前账户</button>') +
       '</div>';
-    paintSkinPreview($('#accSetSkin'), a.skinUrl);
-
+    /* 动作预览：动画驱动自己会重画（站立呼吸 / 行走摆动 / 奔跑加速） */
+    const rigCv = $('#accSetSkin');
+    const rigState = () => {
+      const aa = accOf();
+      return { dataUrl: aa ? aa.skinUrl : null, model: aa && aa.model === 'slim' ? 'slim' : 'classic', pose: poseCur };
+    };
+    skinRigStart(rigCv, rigState);
     const on = (sel, ev, fn) => { const e = $(sel); if (e) e.addEventListener(ev, fn); };
+    (function bindPoseAndLib() {
+      $$('#accSetPoses .pose-btn').forEach(b => b.addEventListener('click', () => {
+        poseCur = b.dataset.pose;
+        $$('#accSetPoses .pose-btn').forEach(x => x.classList.toggle('on', x === b));
+        const nm = $('#accPoseName');
+        if (nm) nm.textContent = (SKIN_POSES.find(x => x.k === poseCur) || {}).t || '';
+        const st = rigState();
+        paintSkinRig(rigCv, st.dataUrl, st.pose, SKIN_RIG.phase || 0.9, st.model);
+      }));
+      let libToken = 0;
+      async function paintSkinLib() {
+        const box = $('#accSkinLib');
+        if (!box) return;
+        const my = ++libToken;
+        const r = await window.lmc.skinLibList();
+        if (my !== libToken || !$('#accSkinLib')) return;
+        const items = (r && r.items) || [];
+        if (!items.length) {
+          box.innerHTML = '<div class="empty-sm">皮肤库还是空的：点下面「导入文件」，或者去「下载」页的「皮肤」分类按玩家名抓一张。</div>';
+          return;
+        }
+        box.innerHTML = '';
+        items.forEach(it => {
+          /* 套用是复制语义：账户的 skin 是 skin_<账户>_<ts>.png 副本，库里列的是原件，
+             所以"当前使用中"要看 inUse（主进程按 meta.from 追溯），不能比文件名 */
+          const inUseNow = (it.inUse || []).indexOf(cur) >= 0;
+          const cell = el('div', 'skin-cell' + (inUseNow ? ' cur' : ''));
+          cell.title = it.name + '（' + (it.model === 'slim' ? '苗条' : '经典') + '）';
+          const cv = document.createElement('canvas');
+          cv.width = 44; cv.height = 44; cv.className = 'skin-cell-head';
+          drawSkinHead(cv, it.dataUrl);
+          cell.appendChild(cv);
+          cell.appendChild(el('div', 'skin-cell-n', esc(it.name)));
+          cell.appendChild(el('div', 'skin-cell-m',
+            (it.model === 'slim' ? '苗条' : '经典') + (it.inUse.length ? ' · 使用中' : '')));
+          const del = el('button', 'skin-cell-del', '×');
+          del.title = '从皮肤库删除（账户正在使用时会拒绝）';
+          del.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const rr = await window.lmc.skinLibRemove({ file: it.file });
+            if (!rr || !rr.ok) { toast((rr && rr.error) || '删除失败', 'error'); return; }
+            toast('已从皮肤库移除');
+            paintSkinLib();
+          });
+          cell.appendChild(del);
+          cell.addEventListener('click', async () => {
+            const aa = accOf();
+            if (!aa) return;
+            if (aa.type === 'ms' || aa.type === 'authlib') {
+              toast('在线账户的皮肤由认证服务器提供，套用本地皮肤不会生效', 'warn');
+              return;
+            }
+            const rr = await window.lmc.skinLibApply({ account: cur, file: it.file, model: aa.model === 'slim' ? 'slim' : 'classic' });
+            if (!rr || !rr.ok) { toast((rr && rr.error) || '套用失败', 'error'); return; }
+            applyAccounts(rr, '已套用「' + it.name + '」（启动游戏后生效）');
+            paint();
+          });
+          box.appendChild(cell);
+        });
+      }
+      on('#accLibRefresh', 'click', () => { paintSkinLib(); toast('已刷新皮肤库'); });
+      on('#accLibImport', 'click', async () => {
+        const r = await window.lmc.skinLibImport();
+        if (r && r.canceled) return;
+        if (!r || !r.ok) { toast((r && r.error) || '导入失败', 'error'); return; }
+        if (r.warn) toast(r.warn, 'warn');
+        toast('已导入 ' + r.added + ' 张皮肤');
+        paintSkinLib();
+      });
+      on('#accLibUrl', 'click', async () => {
+        const inp = $('#accLibUrlInput');
+        const url = String((inp && inp.value) || '').trim();
+        if (!url) { toast('先粘贴一个图片直链', 'warn'); return; }
+        const r = await window.lmc.skinLibImportUrl({ url });
+        if (!r || !r.ok) { toast((r && r.error) || '添加失败', 'error'); return; }
+        if (inp) inp.value = '';
+        toast('已加入皮肤库');
+        paintSkinLib();
+      });
+      paintSkinLib();
+    })();
+
+    const onAccClose = (sel, ev, fn) => { const e = $(sel); if (e) e.addEventListener(ev, fn); };
     on('#accSetClose', 'click', closeModal);
     on('#accSetUse', 'click', async () => {
       applyAccounts(await window.lmc.accountSwitch({ name: cur }), '已切换到 ' + cur);
