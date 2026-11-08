@@ -1603,3 +1603,49 @@ body.turbo *{ text-shadow:none !important; backdrop-filter:none !important; filt
 .skin-card-note{ font-size:11px; color:var(--tx3); margin-top:3px; }
 .skin-card .btn-row{ margin-top:10px; }
 .skin-card-tip{ font-size:11px; color:var(--tx3); margin-top:8px; }
+
+/* 下载页皮肤：三来源切换 */
+.skin-src{ display:flex; gap:8px; margin:2px 0 12px; }
+.skin-src-btn{
+  flex:1; display:flex; flex-direction:column; gap:2px; align-items:flex-start;
+  padding:8px 12px; border-radius:10px; cursor:pointer; text-align:left;
+  border:1px solid var(--line); background:var(--bg1); color:var(--tx2); transition:.15s;
+}
+.skin-src-btn b{ font-size:12.5px; color:var(--tx1); font-weight:600; }
+.skin-src-btn span{ font-size:11px; color:var(--tx3); }
+.skin-src-btn:hover{ border-color:var(--acc2); }
+.skin-src-btn.on{ border-color:var(--acc); background:color-mix(in srgb,var(--acc) 12%,transparent); }
+.skin-src-btn.on b{ color:var(--acc2); }
+
+/* 皮肤站网格 */
+.skin-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:10px; }
+.skin-cell-lg{
+  border:1px solid var(--line); border-radius:10px; padding:8px 6px 6px;
+  background:var(--bg1); text-align:center; transition:.15s; min-width:0;
+}
+.skin-cell-lg:hover{ border-color:var(--acc2); }
+.skin-cell-lg-cv{
+  width:96px; height:141px; display:block; margin:0 auto 6px;
+  image-rendering:pixelated; border-radius:8px; background:rgba(127,127,127,.1);
+}
+.skin-cell-lg.bad .skin-cell-lg-cv{ opacity:.25; }
+.skin-cell-lg-n{
+  font-size:11.5px; color:var(--tx1); white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; padding:0 2px;
+}
+.skin-cell-lg-m{
+  font-size:10.5px; color:var(--tx3); white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; margin:1px 0 6px; padding:0 2px;
+}
+.skin-cell-lg-b{ display:flex; gap:4px; justify-content:center; }
+.skin-cell-lg-b .btn{ padding:3px 8px; font-size:11px; }
+.skin-more{ text-align:center; margin-top:12px; }
+
+/* 本地导入 */
+.skin-drop{
+  border:1.5px dashed var(--line2); border-radius:var(--r-md); padding:26px 16px;
+  text-align:center; background:var(--bg1); transition:.15s;
+}
+.skin-drop.over{ border-color:var(--acc); background:color-mix(in srgb,var(--acc) 10%,transparent); }
+.skin-drop-t{ font-size:13px; color:var(--tx2); margin-bottom:10px; }
+.skin-drop-tip{ font-size:11px; color:var(--tx3); margin-top:8px; }

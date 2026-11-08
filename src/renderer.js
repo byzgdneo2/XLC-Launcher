@@ -1613,7 +1613,7 @@ const DL_HEAD = {
   shader: ['下载光影', '从 <b>Modrinth</b> / <b>CurseForge</b> 搜索光影包，装进 <b>shaderpacks</b> 目录，游戏内用 <b>Iris / OptiFine</b> 选中即可生效'],
   datapack: ['下载数据包', '搜索数据包并装入指定存档的 <b>datapacks</b> 文件夹（进入世界后自动生效）'],
   world: ['下载世界', '从 <b>CurseForge</b> 搜索现成的世界存档，一键装进游戏目录的 <b>saves</b>，进游戏「单人游戏」即可打开'],
-  skin: ['下载皮肤', '按正版玩家名查 <b>Mojang 官方档案</b>，把皮肤存进<b>皮肤库</b>，再套给离线账户']
+  skin: ['下载皮肤', '从<b>公开皮肤库</b>挑（离线账户也能用），或按正版名抓、或导入自己的图 —— 存进<b>皮肤库</b>后套给离线账户']
 };
 function updateDlHead(cat) {
   const h = DL_HEAD[cat] || DL_HEAD.release;
@@ -2938,19 +2938,112 @@ const dpPage = setupResPage({ type: 'datapack', search: '#dpSearch', list: '#dpL
 /* 世界（存档）只有 CurseForge 一个源 —— Modrinth 没有 world 项目类型，所以不给源切换按钮 */
 const wdPage = setupResPage({ type: 'world', search: '#wdSearch', list: '#wdList', pager: '#wdPager', targetSel: '#wdTarget', targetType: 'version', source: 'curseforge' });
 /* ---------------- 下载页「皮肤」----------------
- * 数据源只用 Mojang 官方档案：名字 → UUID → profile → textures.SKIN → PNG。
- * 为什么不接"皮肤画廊"：现成的皮肤站（NameMC / The Skindex / LittleSkin）都没有稳定公开的
- * 搜索接口，抓 HTML 随时会碎；与其塞一堆今天通明天不通的第三方接口，不如把
- * 「按名字抓一张」这条最硬的路径做稳，再配合本地上传 / 直链导入，够日常换了。
+ * 三个来源，共用同一张预览卡（骨骼预览 + 存库 / 套用）：
+ *   1) 皮肤库 —— LittleSkin 公开作品。**离线账户唯一的"按名字找皮肤"途径**：
+ *      Mojang 只认正版名，离线名不存在于任何全局注册表，所以离线用户只能从公开皮肤库挑；
+ *   2) 正版档案 —— Mojang 名字 → UUID → profile → textures.SKIN；
+ *   3) 本地文件 / 直链 —— 自己有图时用，完全不依赖网络。
  */
 const SK_HOT = ['Notch', 'jeb_', 'Dinnerbone', 'Grumm', 'Deadmau5', 'CaptainSparklez'];
+let skSrcCur = 'station';
+const SK_STATION = { kw: '', page: 1, sort: '', items: [], hasNext: false, busy: false };
+
 const skinPage = {
   loaded: false,
   search(name) {
+    if (skSrcCur === 'station') { skStationLoad(false); return; }
     const v = String(name || ($('#skSearch') && $('#skSearch').value) || '').trim();
     skLookup(v);
   }
 };
+
+function skSrcSwitch(src) {
+  skSrcCur = src;
+  $$('#skSrc .skin-src-btn').forEach(b => b.classList.toggle('on', b.dataset.src === src));
+  const map = { station: 'skPaneStation', mojang: 'skPaneMojang', local: 'skPaneLocal' };
+  Object.keys(map).forEach(k => {
+    const e = $('#' + map[k]);
+    if (e) e.style.display = k === src ? '' : 'none';
+  });
+  if (src === 'station' && !SK_STATION.items.length) skStationLoad(false);
+}
+
+/* 尺寸归一化：64×64 / 64×32 直接可用；128 / 256 / 512 的正方形（HD 皮肤）按最近邻缩到 64。
+ * 用 canvas 而不是主进程缩放，是因为 Electron 的 nativeImage.resize 是双线性，会把像素皮肤糊掉。 */
+function skDownscale(dataUrl, cb) {
+  const img = new Image();
+  img.onload = () => {
+    const w = img.width, h = img.height;
+    if (w === 64 && (h === 64 || h === 32)) return cb(null, dataUrl, w, h);
+    if (w === h && w % 64 === 0 && w <= 512) {
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = 64;
+      const cx = c.getContext('2d');
+      cx.imageSmoothingEnabled = false;
+      cx.drawImage(img, 0, 0, 64, 64);
+      return cb(null, c.toDataURL('image/png'), 64, 64);
+    }
+    cb('皮肤图必须是 64×64 / 64×32 的 PNG（128 / 256 的 HD 也支持，会自动缩）', null, w, h);
+  };
+  img.onerror = () => cb('图片解析失败，可能不是 PNG', null, 0, 0);
+  img.src = dataUrl;
+}
+
+/* 一张「已经拿到图」的预览卡。data = {name, png, model, sub, note, source} */
+function skPreviewCard(box, data) {
+  if (!box) return;
+  const d = Object.assign({ name: '皮肤', model: 'classic', source: 'local' }, data || {});
+  box.innerHTML =
+    '<div class="skin-card">' +
+      '<canvas class="skin-card-rig" width="180" height="264"></canvas>' +
+      '<div class="skin-card-body">' +
+        '<div class="skin-card-t"><b>' + esc(d.name) + '</b>' +
+          '<button class="pill sk-model ' + (d.model === 'slim' ? 'snapshot' : 'release') + '">' +
+          (d.model === 'slim' ? '苗条 (Alex)' : '经典 (Steve)') + '</button></div>' +
+        '<div class="skin-card-m">' + esc(d.sub || '') + '</div>' +
+        '<div class="skin-card-note">' + esc(d.note || '') + '</div>' +
+        '<div class="btn-row">' +
+          '<button class="btn primary sk-save"><svg class="ic sm"><use href="#i-download"/></svg> 存到皮肤库</button>' +
+          '<button class="btn ghost sk-use">套用到当前账户</button>' +
+        '</div>' +
+        '<div class="skin-card-tip">点右边的模型标签可以切<b>经典 / 苗条</b>；套用只对<b>离线账户</b>有效。</div>' +
+      '</div>' +
+    '</div>';
+  const cv = box.querySelector('.skin-card-rig');
+  paintSkinRig(cv, d.png, 'idle', 0.6, d.model);
+  const mp = box.querySelector('.sk-model');
+  if (mp) mp.addEventListener('click', () => {
+    d.model = d.model === 'slim' ? 'classic' : 'slim';
+    mp.className = 'pill sk-model ' + (d.model === 'slim' ? 'snapshot' : 'release');
+    mp.textContent = d.model === 'slim' ? '苗条 (Alex)' : '经典 (Steve)';
+    paintSkinRig(cv, d.png, 'idle', 0.6, d.model);
+  });
+  const bs = box.querySelector('.sk-save'), bu = box.querySelector('.sk-use');
+  if (bs) bs.addEventListener('click', () => skCommit(d, false));
+  if (bu) bu.addEventListener('click', () => skCommit(d, true));
+}
+
+/* 存库 / 套用（三个来源共用；apply=true 时直接套给当前账户） */
+async function skCommit(data, apply) {
+  const d = data || {};
+  const add = await window.lmc.skinLibAddPng({
+    dataUrl: d.png, name: d.name || '皮肤', model: d.model, source: d.source || 'local'
+  });
+  if (!add || !add.ok) { toast((add && add.error) || '保存失败', 'error'); return; }
+  if (!apply) { toast('已存到皮肤库：' + (d.name || '皮肤')); return; }
+  const acc = S.accActive || (S.config && S.config.activeAccount) || '';
+  if (!acc) { toast('还没有账户，先去「账户」页建一个离线账户', 'warn'); return; }
+  const rec = (S.accounts || []).find(x => x.name === acc);
+  if (rec && (rec.type === 'ms' || rec.type === 'authlib')) {
+    toast('在线账户的皮肤由认证服务器提供，套用本地皮肤不会生效', 'warn');
+    return;
+  }
+  const ap = await window.lmc.skinLibApply({ account: acc, file: add.file, model: d.model });
+  if (!ap || !ap.ok) { toast((ap && ap.error) || '套用失败', 'error'); return; }
+  applyAccounts(ap, '已把「' + (d.name || '皮肤') + '」套到 ' + acc + '（启动游戏后生效）');
+  toast('已套用给 ' + acc);
+}
+
 function skHotRender() {
   const box = $('#skHot');
   if (!box) return;
@@ -2961,6 +3054,7 @@ function skHotRender() {
     skLookup(b.dataset.n);
   }));
 }
+
 async function skLookup(name) {
   const box = $('#skResult');
   if (!box) return;
@@ -2969,50 +3063,198 @@ async function skLookup(name) {
   const r = await window.lmc.skinLookup({ name });
   if (!r || !r.ok) {
     box.innerHTML = '<div class="empty-sm">' + esc((r && r.error) || '获取失败') +
-      (r && r.notFound ? '<br><span style="font-size:11px">正版里没有这个名字（离线账户没有公开皮肤）</span>' : '') + '</div>';
+      (r && r.notFound
+        ? '<br><span style="font-size:11px">离线名字在正版里查不到是正常的 —— 换左边「皮肤库」挑一个，或「本地文件」导入自己的图</span>'
+        : '') + '</div>';
     return;
   }
   const kb = Math.max(1, Math.round((r.size || 0) / 1024 * 10) / 10);
-  box.innerHTML =
-    '<div class="skin-card">' +
-      '<canvas class="skin-card-rig" width="180" height="264"></canvas>' +
-      '<div class="skin-card-body">' +
-        '<div class="skin-card-t"><b>' + esc(r.name) + '</b>' +
-          '<span class="pill ' + (r.model === 'slim' ? 'snapshot' : 'release') + '">' +
-          (r.model === 'slim' ? '苗条 (Alex)' : '经典 (Steve)') + '</span></div>' +
-        '<div class="skin-card-m">UUID ' + esc(String(r.uuid || '').slice(0, 32)) + ' · 皮肤 ' + kb + ' KB</div>' +
-        '<div class="skin-card-note">来自 Mojang 官方档案，点按钮才会下载并保存</div>' +
-        '<div class="btn-row">' +
-          '<button class="btn primary" id="skSave"><svg class="ic sm"><use href="#i-download"/></svg> 存到皮肤库</button>' +
-          '<button class="btn ghost" id="skUse">套用到当前账户</button>' +
-        '</div>' +
-        '<div class="skin-card-tip">套用只对<b>离线账户</b>有效；正版 / 外置登录账户的皮肤由认证服务器提供。</div>' +
-      '</div>' +
+  skPreviewCard(box, {
+    name: r.name, png: r.png, model: r.model, source: 'mojang',
+    sub: 'UUID ' + String(r.uuid || '').slice(0, 32) + ' · 皮肤 ' + kb + ' KB',
+    note: '来自 Mojang 官方档案，点按钮才会下载并保存'
+  });
+}
+
+/* 皮肤站：一页 15 条，点「加载更多」翻页 */
+async function skStationLoad(more) {
+  const box = $('#stList');
+  if (!box) return;
+  const st = SK_STATION;
+  if (st.busy) return;
+  st.busy = true;
+  const page = more ? st.page + 1 : 1;
+  const kw = String(($('#stSearch') && $('#stSearch').value) || '').trim();
+  if (!more) { st.items = []; box.innerHTML = '<div class="empty-sm">正在读取皮肤库…</div>'; }
+  const btn = $('#stMore');
+  if (btn) btn.textContent = '加载中…';
+  const r = await window.lmc.skinStationList({ source: 'littleskin', keyword: kw, page, sort: st.sort });
+  st.busy = false;
+  if (btn) btn.textContent = '加载更多';
+  if (!r || !r.ok) {
+    box.innerHTML = '<div class="empty-sm">' + esc((r && r.error) || '皮肤库读取失败') +
+      '<br><span style="font-size:11px">网络问题不影响使用 —— 换「本地文件」导入自己的皮肤</span></div>';
+    if (btn) btn.style.display = 'none';
+    return;
+  }
+  st.page = page; st.kw = kw; st.hasNext = !!r.hasNext;
+  const items = r.items || [];
+  if (!items.length && !more) {
+    box.innerHTML = '<div class="empty-sm">没搜到「' + esc(kw) + '」相关的皮肤，换个词试试</div>';
+    if (btn) btn.style.display = 'none';
+    return;
+  }
+  st.items = more ? st.items.concat(items) : items;
+  if (!more) box.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  items.forEach(it => frag.appendChild(skStationCard(it)));
+  box.appendChild(frag);
+  if (btn) btn.style.display = st.hasNext ? '' : 'none';
+  skStationFill();
+}
+
+function skStationCard(it) {
+  const cell = el('div', 'skin-cell-lg');
+  cell.dataset.url = it.url;
+  cell.dataset.model = it.model;
+  cell.innerHTML =
+    '<canvas class="skin-cell-lg-cv" width="96" height="141"></canvas>' +
+    '<div class="skin-cell-lg-n" title="' + esc(it.name || '') + '">' + esc(it.name || '未命名') + '</div>' +
+    '<div class="skin-cell-lg-m">' + esc(it.author || '匿名') + ' · ♥ ' + fmtNum(it.likes) + (it.hd ? ' · HD' : '') + '</div>' +
+    '<div class="skin-cell-lg-b">' +
+      '<button class="btn ghost sm" data-act="save">存库</button>' +
+      '<button class="btn ghost sm" data-act="use">套用</button>' +
     '</div>';
-  const cv = box.querySelector('.skin-card-rig');
-  paintSkinRig(cv, r.png, 'idle', 0.6, r.model);
-  const save = async (apply) => {
-    const add = await window.lmc.skinLibAddPng({ dataUrl: r.png, name: r.name, model: r.model, source: 'mojang' });
-    if (!add || !add.ok) { toast((add && add.error) || '保存失败', 'error'); return; }
-    if (!apply) { toast('已存到皮肤库：' + r.name); return; }
-    const acc = S.accActive || (S.config && S.config.activeAccount) || '';
-    if (!acc) { toast('还没有账户，先去「账户」页建一个离线账户', 'warn'); return; }
-    const rec = (S.accounts || []).find(x => x.name === acc);
-    if (rec && (rec.type === 'ms' || rec.type === 'authlib')) {
-      toast('在线账户的皮肤由认证服务器提供，套用本地皮肤不会生效', 'warn');
+  const pick = async (apply) => {
+    if (cell.dataset.busy) return;
+    cell.dataset.busy = '1';
+    let png = cell.dataset.png;
+    if (!png) {
+      const g = await window.lmc.skinGrab({ url: it.url });
+      if (!g || !g.ok) {
+        cell.dataset.busy = '';
+        toast((g && g.error) || '皮肤下载失败', 'error');
+        return;
+      }
+      png = await new Promise(res => skDownscale(g.png, (e, p) => res(e ? '' : p)));
+      if (!png) { cell.dataset.busy = ''; toast('这张皮肤的尺寸不支持', 'error'); return; }
+      cell.dataset.png = png;
+      const cv = cell.querySelector('canvas');
+      if (cv) paintSkinRig(cv, png, 'idle', 0.6, it.model);
+      cell.dataset.ready = '1';
+    }
+    cell.dataset.busy = '';
+    await skCommit({
+      name: it.name || ('皮肤 ' + it.tid), png, model: cell.dataset.model || it.model,
+      source: 'littleskin', sub: '来自 LittleSkin · 作者 ' + (it.author || '匿名')
+    }, apply);
+  };
+  const bs = cell.querySelector('[data-act="save"]'), bu = cell.querySelector('[data-act="use"]');
+  if (bs) bs.addEventListener('click', (e) => { e.stopPropagation(); pick(false); });
+  if (bu) bu.addEventListener('click', (e) => { e.stopPropagation(); pick(true); });
+  return cell;
+}
+
+/* 网格里的图按 4 并发懒抓（一页 15 张，每张几 KB；串行会明显卡） */
+function skStationFill() {
+  /* $$ 返回的是 NodeList（没有 filter），这里必须转成数组 */
+  const cells = Array.from($$('#stList .skin-cell-lg')).filter(c => !c.dataset.ready);
+  let i = 0;
+  const run = async () => {
+    while (i < cells.length) {
+      const cell = cells[i++];
+      if (cell.dataset.ready) continue;
+      const g = await window.lmc.skinGrab({ url: cell.dataset.url });
+      if (!g || !g.ok) { cell.dataset.err = (g && g.error) || 'no-result'; cell.classList.add('bad'); continue; }
+      skDownscale(g.png, (err, png) => {
+        if (err) { cell.classList.add('bad'); return; }
+        cell.dataset.png = png;
+        cell.dataset.ready = '1';
+        const cv = cell.querySelector('canvas');
+        if (cv) paintSkinRig(cv, png, 'idle', 0.6, cell.dataset.model);
+      });
+    }
+  };
+  run(); run(); run(); run();
+}
+
+/* 本地图：拖进来 / 选文件 / 粘直链，都走这里出预览 */
+function skLocalFrom(dataUrl, name) {
+  const box = $('#skLocalResult');
+  if (!box) return;
+  box.innerHTML = '<div class="empty-sm">正在读取图片…</div>';
+  skDownscale(dataUrl, (err, png) => {
+    if (err) { box.innerHTML = '<div class="empty-sm">' + esc(err) + '</div>'; return; }
+    skPreviewCard(box, {
+      name: name || '本地皮肤', png, model: 'classic', source: 'local',
+      sub: '本地图片 · 已就绪', note: '确认无误后存到皮肤库，或直接套给离线账户'
+    });
+  });
+}
+
+skHotRender();
+/* 皮肤分类的接线：放在 skinPage / SK_STATION 定义之后（顶层提前调用会 TDZ） */
+(function bindSkinPage() {
+  const srcBox = $('#skSrc');
+  if (srcBox) $$('#skSrc .skin-src-btn').forEach(b => b.addEventListener('click', () => skSrcSwitch(b.dataset.src)));
+  const stGo = $('#stGo'), stIn = $('#stSearch'), stSort = $('#stSort'), stMore = $('#stMore');
+  if (stGo) stGo.addEventListener('click', () => skStationLoad(false));
+  if (stIn) stIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') skStationLoad(false); });
+  if (stSort) stSort.addEventListener('click', () => {
+    SK_STATION.sort = SK_STATION.sort === 'likes' ? '' : 'likes';
+    stSort.textContent = SK_STATION.sort === 'likes' ? '最新优先' : '热门优先';
+    SK_STATION.items = [];
+    skStationLoad(false);
+  });
+  if (stMore) stMore.addEventListener('click', () => skStationLoad(true));
+  /* 滚到底自动翻页：按钮本身就是哨兵，进入视口（提前 200px）就自动加载下一页。
+     hasNext=false 时按钮 display:none，观察器天然停住；busy 由 skStationLoad 自身防重入。
+     按钮保留，作为自动加载失灵时的手动兜底。 */
+  if (stMore && 'IntersectionObserver' in window) {
+    new IntersectionObserver((ents) => {
+      ents.forEach(en => { if (en.isIntersecting && SK_STATION.hasNext && !SK_STATION.busy) skStationLoad(true); });
+    }, { rootMargin: '200px' }).observe(stMore);
+  }
+  /* 本地：选文件 / 拖拽 / 直链 */
+  const pick = $('#skPick');
+  if (pick) pick.addEventListener('click', async () => {
+    const r = await window.lmc.skinLibPickFile();
+    if (!r || !r.ok) { if (!(r && r.canceled)) toast((r && r.error) || '读取失败', 'error'); return; }
+    skLocalFrom(r.png, r.name);
+  });
+  const urlGo = $('#skUrlGo'), urlIn = $('#skUrl');
+  const grabUrl = async () => {
+    const url = String((urlIn && urlIn.value) || '').trim();
+    const box = $('#skLocalResult');
+    if (!url) { toast('先填一个图片地址', 'warn'); return; }
+    if (box) box.innerHTML = '<div class="empty-sm">正在下载…</div>';
+    const r = await window.lmc.skinGrab({ url });
+    if (!r || !r.ok) {
+      if (box) box.innerHTML = '<div class="empty-sm">' + esc((r && r.error) || '下载失败') + '</div>';
       return;
     }
-    const ap = await window.lmc.skinLibApply({ account: acc, file: add.file, model: r.model });
-    if (!ap || !ap.ok) { toast((ap && ap.error) || '套用失败', 'error'); return; }
-    applyAccounts(ap, '已把「' + r.name + '」套到 ' + acc + '（启动游戏后生效）');
-    toast('已套用给 ' + acc);
+    const nm = decodeURIComponent((url.split('/').pop() || '').replace(/\.png.*$/i, '')) || '直链皮肤';
+    skLocalFrom(r.png, nm);
   };
-  const bs = box.querySelector('#skSave'), bu = box.querySelector('#skUse');
-  if (bs) bs.addEventListener('click', () => save(false));
-  if (bu) bu.addEventListener('click', () => save(true));
-}
-/* 推荐词 chips：放在 SK_HOT / skHotRender 定义之后（顶层提前调用会 TDZ，见 skGo 接线处注释） */
-skHotRender();
+  if (urlGo) urlGo.addEventListener('click', grabUrl);
+  if (urlIn) urlIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') grabUrl(); });
+  const drop = $('#skDrop');
+  if (drop) {
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      drop.classList.remove('over');
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      if (!/\.png$/i.test(f.name)) { toast('只支持 PNG 皮肤图', 'warn'); return; }
+      const fr = new FileReader();
+      fr.onload = () => skLocalFrom(String(fr.result), f.name.replace(/\.png$/i, ''));
+      fr.onerror = () => toast('读取文件失败', 'error');
+      fr.readAsDataURL(f);
+    });
+  }
+})();
 /* 下载页资源类 tab → 区块/工厂实例映射 */
 const DL_RES_TABS = {
   mod: { area: 'resArea', page: () => modPage },

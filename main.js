@@ -150,6 +150,7 @@ try {
    → **1.4-snapshot1（功能开关搬进设置项 features.downloadGame / modpack，外置插件凭 control 权限就能把下架的下载页放回来；配合「下载恢复器」2.0.0 插件）**
    → **1.4-snapshot2（修四类实操问题：中文名把账户列表清空、下载卡在 94%、整合包装进实例目录并验证通过、Fabric 实例缺加载器本体导致启动即崩；整合包不再随下载页下架，只留下载页交给插件；另接管系统代理，开着 VPN/代理也能下载）**
    → **1.4-snapshot3（下载页新增「皮肤」分类：按正版玩家名抓 Mojang 官方皮肤；账户设置新增皮肤库与动作预览（站立 / 行走 / 奔跑 / 潜行 / 持物 / 穿甲）；修复存档区块预览只能画成正方形、地形被拉伸的问题）**
+   → **1.4-snapshot4（下载页皮肤改成三种来源：皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤；皮肤库安全收口：按 URL 导入拦内网/回环地址（防 SSRF）、改名补路径校验；版本列表「置顶区」测试断言适配「下载游戏」下架）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -158,7 +159,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.4-snapshot3';
+const APP_VERSION = '1.4-snapshot4';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -11004,54 +11005,48 @@ function updateParserSelfTest() {
  * 这里只保留「当前版本」一条：更新日志界面因此不再罗列一大串历史版本。
  * 首次以新版本运行时会自动弹出公告，设置 → 版本更新 里也能随时查看。
  * 每次发版：把 version 改成 APP_VERSION，替换掉这一条的内容即可（不用往里追加）。
- * 1.4-snapshot3 之前的 24 条历史公告原文照录在 docs/CHANGELOG-history.md，需要查旧记录去那里看。
+ * 1.4-snapshot4 之前的 25 条历史公告原文照录在 docs/CHANGELOG-history.md，需要查旧记录去那里看。
  * 公告属于当前版本：改完就往这条里加条目，别再动已经发出去的内容（那是改写历史）。 */
 const CHANGELOG = [
   {
-    version: '1.4-snapshot3',
+    version: '1.4-snapshot4',
     date: '2026-11-07',
     tag: '快照版',
-    notice: '1.4 第三个快照：下载页多了「皮肤」分类，能按正版玩家名抓 Mojang 官方皮肤；账户设置里多了皮肤库和会动的预览（站立 / 行走 / 奔跑 / 潜行 / 持物 / 穿甲）；顺手修掉存档区块预览「永远是个正方形」的老毛病 —— 长条地形以后按真实比例显示，不再被压扁。',
+    notice: '1.4 第四个快照：下载页的皮肤不再只认正版 —— 新增「皮肤站 / 正版档案 / 本地文件」三种来源，离线账户也能直接搜皮肤站的作品、拖本地 PNG 换肤；同时给皮肤库补上两处安全收口，按 URL 导入会拦掉内网 / 回环地址，改名补上与删除同款的路径校验。',
     groups: [
       {
-        icon: 'i-user',
-        title: '新增 · 下载页「皮肤」分类',
+        icon: 'i-palette',
+        title: '新增 · 下载页皮肤不再只认正版',
         items: [
-          '**按正版玩家名查**：名字 → UUID → 官方档案 → 皮肤直链，只走 Mojang 官方接口。正版里没有的名字会明确提示（离线账户本来就没有公开皮肤）',
-          '**先存库再套用**：结果卡上带动作预览、UUID 与文件大小，一个按钮存进皮肤库、另一个直接套给当前账户；下面还有 6 个推荐玩家，点一下就能查',
-          '**只收真皮肤**：64×64（新版）与 64×32（旧版）之外的图在导入时就被拒 —— 128×128 之类的图进游戏根本不生效，不如当场说清楚'
+          '**三种来源**：皮肤分类顶部可切「皮肤站 / 正版档案 / 本地文件」，默认打开皮肤站 —— 离线账户也能直接换皮肤，不再被「正版里查不到这个名字」挡在门外',
+          '**皮肤站**：接 LittleSkin 公开皮肤库，搜作品名或作者名（中文也能搜），可切最新 / 热门，往下滚到底自动加载下一页；每张卡片直接显示穿在身上的效果、作者和点赞数',
+          '**本地文件**：把 PNG 拖进虚线框、点「选择文件…」、或粘贴图片直链都行；128×128 / 256×256 的 HD 皮肤按最近邻缩到 64（不会糊），64×32 的老皮肤也认，尺寸不合规直接拒收',
+          '**修复导入不显示**：账户设置 → 皮肤库里导入与账户正在用皮肤同内容的图片时，以前会提示「已导入」但列表里永远不出现（去重误把账户私有副本当库条目）—— 现在正常入库并立刻显示',
+          '**套用即生效**：预览卡上的模型标签可点，随时在经典（Steve）和苗条（Alex）之间切；「存库」收进皮肤库，「套用」直接给当前账户 —— 离线账户启动时会注入本地皮肤服务器，游戏里真能看到'
         ]
       },
       {
-        icon: 'i-user-check',
-        title: '新增 · 账户设置：皮肤库 + 动作预览',
+        icon: 'i-globe',
+        title: '安全 · 按 URL 导入皮肤拦内网地址',
         items: [
-          '**预览会动了**：原来只有一张静止贴图，现在是个会动的小人 —— 站立有呼吸、行走摆臂、奔跑加速、潜行弓身、双手托着方块、整套盔甲上身，六个动作随点随换',
-          '**皮肤库**：账户设置里列出本机所有皮肤（头像 + 名字 + 模型），点一格就套给这个账户；正在用的那格有描边和「使用中」，删除别人正在用的会被拦下并说是谁在用',
-          '**套用是复制一份**：不共享文件，换皮肤 / 删账户都不会动到库里的原件；同一张图重复导入按内容去重，库里不会出现两条一模一样的',
-          '**在线账户不显示皮肤库**：微软 / 外置登录账户的皮肤由认证服务器下发，本地换了也不生效，干脆不摆这块区域'
+          '**拦回环与内网**：按 URL 导入皮肤现在会拒绝 127.0.0.1、localhost、10.x / 172.16-31 / 192.168.x、169.254.x 等内网与云元数据地址，只放行公网直链 —— 避免「按 URL 导入」被当成探测内网服务的跳板',
+          '**尺寸与大小照旧**：仍是 64×64 / 64×32 的 PNG 才收、超过 2MB 拒收，这一层没有放宽'
         ]
       },
       {
-        icon: 'i-map',
-        title: '修复 · 存档区块预览只能画成正方形',
+        icon: 'i-lock',
+        title: '安全 · 皮肤库改名补路径校验',
         items: [
-          '**根因**：预览窗口固定按 32×32 区块取，长条或形状不规则的存档被硬塞进正方形，比例完全失真 —— 1×40 的峡谷也会变成一张方图',
-          '**改按真实长宽比算窗口**：先取已加载区块的包围盒，再按面积预算（最多 1200 区块、单边最多 48）等比缩放，1×40 的存档出 48×2，60×3 的存档也不会被压扁',
-          '**顺带裁掉空白边**：四周解析不出数据的行 / 列会被裁掉（比如某个 region 只剩表头、扇区指向文件外），图里不再有大片未加载底色',
-          '**小存档行为不变**：规规矩矩的 2×2 世界仍然出 32×32',
-          '新增 `qa/e2e-mappreview.js`：长条 / 超长条 / 边缘破损 / 小方块四个夹具钉住比例、裁剪与老行为'
+          '**先查文件名合法性**：改名现在和删除 / 套用一样，先拒掉带 `../` 的越界文件名，改不到皮肤库外面的文件',
+          '**渲染层被污染也安全**：即使界面被注入、传进越界文件名，主进程这一层也会拦下'
         ]
       },
       {
-        icon: 'i-user-check',
-        title: '修复 · 皮肤预览与界面细节',
+        icon: 'i-tools',
+        title: '改进 · 测试口径与功能下架对齐',
         items: [
-          '**行走 / 奔跑重画**：正面 2D 视角改成「一条腿向外迈出、另一条收起抬高 + 对侧摆臂」，不再出现两腿交叉成 X、双臂外张像投降的样子；持物改成双手在胸前托着方块，穿甲贴片贴合身体',
-          '**修掉两处启动期崩溃**：新皮肤页与账户弹窗的初始化顺序会让整页脚本报错，现在页面与弹窗都能正常打开',
-          '**皮肤库细节**：改名静默失效、套用后库里多出重复条目、在线账户仍显示皮肤库等问题一并处理；移除皮肤时同步清理元数据',
-          '**更新公告瘦身**：弹窗只显示当前版本，24 条历史公告原文归档到 `docs/CHANGELOG-history.md`，不再逐版堆在启动器里',
-          '新增 `qa/e2e-skinlib.js`（30 项断言）与 `qa/shot-skin-rig.js`（六动作视觉验收图），并跑通快档回归'
+          '「下载游戏」默认下架后，版本列表整体不渲染，其「置顶区」测试改判为跳过 —— 不再把「本来就没有列表」误报成产品缺陷',
+          '皮肤库测试新增两条：改名拒绝越界文件名、URL 导入拒绝内网地址，钉住上面两处收口'
         ]
       }
     ]
@@ -12076,10 +12071,9 @@ ipcMain.handle('account:skin', async (_e, p) => {
   });
   if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
   try {
-    const buf = await fsp.readFile(r.filePaths[0]);
-    const dim = pngSize(buf);
-    if (!dim) return { ok: false, error: '不是有效的 PNG 文件' };
-    if (!((dim.w === 64 && (dim.h === 64 || dim.h === 32)))) return { ok: false, error: '皮肤必须是 64x64（新版）或 64x32（旧版）的 PNG，当前 ' + dim.w + 'x' + dim.h };
+    const c = skinPng64(await fsp.readFile(r.filePaths[0]));
+    if (c.error) return { ok: false, error: c.error };
+    const buf = c.buf;
     fs.mkdirSync(SKINS_DIR, { recursive: true });
     const file = 'skin_' + name.replace(/[^\w]/g, '_') + '_' + Date.now() + '.png';
     fs.writeFileSync(path.join(SKINS_DIR, file), buf);
@@ -12189,6 +12183,10 @@ function skinLibWrite(buf, name, model, source) {
   const sha1 = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 12);
   let files = [];
   try { files = fs.readdirSync(SKINS_DIR).filter(f => /\.png$/i.test(f)); } catch (_) {}
+  /* 去重只认库条目：skin_<账户>_<ts>.png 是「套用」生成的账户私有副本，本来就不进库列表。
+     以前拿它当命中项，导入同内容皮肤时只更新副本的 meta、不写 lib_*.png —— 结果弹「已导入 1 张
+     皮肤」但库列表里永远看不见（账户设置里那张图就是这么「消失」的）。 */
+  files = files.filter(f => !/^skin_/i.test(f));
   let exist = '';
   for (const f of files) {
     try {
@@ -12217,11 +12215,46 @@ function skinCheckPng(buf) {
   }
   return { dim };
 }
+/* 收一张用户给的皮肤：64x64 / 64x32 原样收；HD（64 的整数倍、宽 ≤512）按最近邻缩到 64。
+   以前这里只认 64x64，用户从皮肤站下的 128 / 256 HD 皮肤点「导入文件」一律被拒 —— 而下载页
+   那条路（canvas 缩放）却能收，同一个功能两套口径。缩放在主进程做，多选导入和直链两条路就都通了。 */
+function skinPng64(buf) {
+  const dim = pngSize(buf);
+  if (!dim) return { error: '不是有效的 PNG 文件' };
+  if (dim.w === 64 && (dim.h === 64 || dim.h === 32)) return { buf, dim };
+  const hd = dim.w === dim.h || dim.h * 2 === dim.w;
+  if (!hd || dim.w % 64 !== 0 || dim.w > 512) {
+    return { error: '皮肤必须是 64x64（新版）或 64x32（旧版）的 PNG，当前 ' + dim.w + 'x' + dim.h };
+  }
+  try {
+    const ni = require('electron').nativeImage;
+    const img = ni.createFromBuffer(buf);
+    if (img.isEmpty()) return { error: '不是有效的 PNG 文件' };
+    const sz = img.getSize();
+    const sw = sz.width || dim.w, sh = sz.height || dim.h;
+    const k = sw / 64;
+    const dw = 64, dh = Math.max(1, Math.round(sh / k));
+    const src = img.toBitmap();                       /* BGRA */
+    if (src.length < sw * sh * 4) return { error: '图片解码失败' };
+    const out = Buffer.alloc(dw * dh * 4);
+    for (let y = 0; y < dh; y++) {
+      const sy = Math.min(sh - 1, Math.floor(y * k));
+      for (let x = 0; x < dw; x++) {
+        const sx = Math.min(sw - 1, Math.floor(x * k));
+        const si = (sy * sw + sx) * 4, di = (y * dw + x) * 4;
+        out[di] = src[si]; out[di + 1] = src[si + 1]; out[di + 2] = src[si + 2]; out[di + 3] = src[si + 3];
+      }
+    }
+    const png = ni.createFromBitmap(out, { width: dw, height: dh }).toPNG();
+    if (!png || !png.length) return { error: 'HD 皮肤缩放失败' };
+    return { buf: png, dim: { w: dw, h: dh }, downscaled: true };
+  } catch (e) { return { error: 'HD 皮肤缩放失败：' + e.message }; }
+}
 ipcMain.handle('skinlib:list', () => ({ ok: true, items: skinLibItems() }));
 ipcMain.handle('skinlib:import', async () => {
   try {
     const r = await dialog.showOpenDialog(win, {
-      title: '导入皮肤到皮肤库（64x64 或 64x32 PNG）',
+      title: '导入皮肤到皮肤库（64x64 / 64x32，HD 自动缩放）',
       filters: [{ name: '皮肤 PNG', extensions: ['png'] }],
       properties: ['openFile', 'multiSelections']
     });
@@ -12233,10 +12266,9 @@ ipcMain.handle('skinlib:import', async () => {
     const bad = [];
     for (const fp of r.filePaths) {
       try {
-        const buf = await fsp.readFile(fp);
-        const c = skinCheckPng(buf);
+        const c = skinPng64(await fsp.readFile(fp));
         if (c.error) { bad.push(path.basename(fp) + '：' + c.error); continue; }
-        skinLibWrite(buf, path.basename(fp).replace(/\.png$/i, ''), 'classic', 'file');
+        skinLibWrite(c.buf, path.basename(fp).replace(/\.png$/i, ''), 'classic', 'file');
         added++;
       } catch (e) { bad.push(path.basename(fp) + '：' + e.message); }
     }
@@ -12249,33 +12281,52 @@ ipcMain.handle('skinlib:add-png', (_e, p) => {
     const url = String((p && p.dataUrl) || '');
     const m = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/.exec(url);
     if (!m) return { ok: false, error: '不是 PNG 数据' };
-    const buf = Buffer.from(m[1], 'base64');
-    const c = skinCheckPng(buf);
+    const c = skinPng64(Buffer.from(m[1], 'base64'));
     if (c.error) return { ok: false, error: c.error };
     if (skinLibItems().length >= SKIN_LIB_MAX) return { ok: false, error: '皮肤库最多 ' + SKIN_LIB_MAX + ' 个，先删几个不用的' };
-    const file = skinLibWrite(buf, String((p && p.name) || '皮肤'), (p && p.model), (p && p.source) || 'download');
-    return { ok: true, file, items: skinLibItems() };
+    const file = skinLibWrite(c.buf, String((p && p.name) || '皮肤'), (p && p.model), (p && p.source) || 'download');
+    return { ok: true, file, dim: c.dim, items: skinLibItems() };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+/* SSRF：按 URL 导入皮肤时，拦掉回环 / 内网 / 云元数据 / 链路本地地址（审计 S2）。
+   用户自填的 URL 理论上可控，但下载会走 netFetch + 系统代理，拦一层成本极低，
+   也避免「填个内网服务地址探一探」的轻微 SSRF 面。 */
+function skinUrlHostBlocked(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');  /* 剥掉 IPv6 方括号 */
+  if (!h) return true;
+  if (h === 'localhost' || h === 'localhost.localdomain' || h === '127.0.0.1' ||
+      h === '0.0.0.0' || h === '169.254.169.254' || h === '::1') return true;
+  if (h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (/^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || /^0\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return true;                       /* 172.16/12 */
+  if (/^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./.test(h)) return true;      /* 运营商级 NAT 100.64/10 */
+  if (/^fe80:/i.test(h) || /^f[cd][0-9a-f]{2}:/i.test(h)) return true;             /* IPv6 链路本地 / 唯一本地 */
+  return false;
+}
 ipcMain.handle('skinlib:import-url', async (_e, p) => {
   const url = String((p && p.url) || '').trim();
   if (!/^https?:\/\//i.test(url)) return { ok: false, error: '请填 http(s) 开头的图片直链' };
+  try {
+    if (skinUrlHostBlocked(new URL(url).hostname)) return { ok: false, error: '不支持内网 / 本地地址' };
+  } catch (_) { return { ok: false, error: '地址无效' }; }
   try {
     const r = await netFetch(url, {}, 20000);
     if (!r.ok) return { ok: false, error: '下载失败（HTTP ' + r.status + '）' };
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length > 2 * 1024 * 1024) return { ok: false, error: '图片太大（超过 2MB）' };
-    const c = skinCheckPng(buf);
+    const c = skinPng64(buf);
     if (c.error) return { ok: false, error: c.error };
     const nm = String((p && p.name) || '').trim() || (url.split('/').pop() || '皮肤').replace(/\.png.*$/i, '');
-    const file = skinLibWrite(buf, nm, (p && p.model), 'url');
-    return { ok: true, file, items: skinLibItems() };
+    const file = skinLibWrite(c.buf, nm, (p && p.model), 'url');
+    return { ok: true, file, dim: c.dim, items: skinLibItems() };
   } catch (e) { return { ok: false, error: '网络错误：' + e.message }; }
 });
 ipcMain.handle('skinlib:rename', (_e, p) => {
   const file = String((p && p.file) || '');
   const name = String((p && p.name) || '').trim().slice(0, 40);
-  if (!file || !fs.existsSync(path.join(SKINS_DIR, file))) return { ok: false, error: '皮肤不存在' };
+  /* 与 remove/apply 同口径：拒绝越界文件名（审计 S1），渲染层被污染也传不进 ../xxx */
+  if (!file || path.basename(file) !== file) return { ok: false, error: '非法文件名' };
+  if (!fs.existsSync(path.join(SKINS_DIR, file))) return { ok: false, error: '皮肤不存在' };
   if (!name) return { ok: false, error: '名字不能为空' };
   const meta = skinLibMeta();
   /* 顺序不能反：Object.assign({ name }, meta[file]) 会让旧名字把新名字盖掉（改名静默失效） */
@@ -12353,13 +12404,13 @@ ipcMain.handle('skin:lookup', async (_e, p) => {
     const r3 = await netFetch(skinMeta.url, {}, 15000);
     if (!r3.ok) return { ok: false, error: '皮肤图片下载失败（HTTP ' + r3.status + '）' };
     const buf = Buffer.from(await r3.arrayBuffer());
-    const c = skinCheckPng(buf);
+    const c = skinPng64(buf);
     if (c.error) return { ok: false, error: '皮肤图片异常：' + c.error };
     const res = {
       name: String((prof && prof.name) || name), uuid, model,
       capeUrl: (capeMeta && capeMeta.url) || null,
-      png: 'data:image/png;base64,' + buf.toString('base64'),
-      size: buf.length
+      png: 'data:image/png;base64,' + c.buf.toString('base64'),
+      size: c.buf.length
     };
     SKIN_LOOKUP_CACHE.set(key, { at: Date.now(), res });
     if (SKIN_LOOKUP_CACHE.size > 60) {
@@ -12368,6 +12419,97 @@ ipcMain.handle('skin:lookup', async (_e, p) => {
     }
     return Object.assign({ ok: true }, res);
   } catch (e) { return { ok: false, error: '网络错误：' + e.message }; }
+});
+/* ---- 皮肤站（第三方公开皮肤库）：离线账户唯一能"按名字找皮肤"的途径 ----
+   Mojang 只认正版名，离线名不存在于任何全局注册表，所以离线用户要么从皮肤站挑公开作品，
+   要么用自己的图。这里接 Blessing Skin 系站点（LittleSkin）：列表是 GET /skinlib/list，
+   必须带 Accept: application/json 才拿 JSON（否则回 SPA 页面）；原图在 /raw/<tid>。 */
+const SKIN_STATIONS = {
+  littleskin: { name: 'LittleSkin', base: 'https://littleskin.cn' }
+};
+const SKIN_STATION_CACHE = new Map();
+function skinStationHosts() {
+  return Object.values(SKIN_STATIONS).map(s => { try { return new URL(s.base).hostname; } catch (_) { return ''; } }).filter(Boolean);
+}
+/* 把抓到的图统一校验成"能当皮肤用"的形状：64x64 / 64x32，或 64 的整数倍正方形（HD，前端缩到 64） */
+function skinShapeOk(dim) {
+  if (!dim) return '不是有效的 PNG 文件';
+  if (dim.w === 64 && (dim.h === 64 || dim.h === 32)) return '';
+  if (dim.w === dim.h && dim.w % 64 === 0 && dim.w <= 512) return '';
+  return '皮肤图必须是 64x64 / 64x32 的 PNG（当前 ' + dim.w + 'x' + dim.h + '）';
+}
+ipcMain.handle('skin:station-list', async (_e, p) => {
+  const src = String((p && p.source) || 'littleskin');
+  const st = SKIN_STATIONS[src];
+  if (!st) return { ok: false, error: '未知皮肤站' };
+  const kw = String((p && p.keyword) || '').trim().slice(0, 32);
+  const page = Math.max(1, Math.min(30, Number(p && p.page) || 1));
+  const sort = (p && p.sort) === 'likes' ? '&sort=likes' : '';
+  const key = src + '|' + kw + '|' + page + '|' + sort;
+  const hit = SKIN_STATION_CACHE.get(key);
+  if (hit && Date.now() - hit.at < 3 * 60 * 1000) return Object.assign({ ok: true, cached: true }, hit.res);
+  const url = st.base + '/skinlib/list?keyword=' + encodeURIComponent(kw) + '&page=' + page + sort;
+  try {
+    const r = await netFetch(url, { headers: { Accept: 'application/json' } }, 15000);
+    if (!r.ok) return { ok: false, error: st.name + ' 返回 HTTP ' + r.status };
+    const j = await r.json();
+    const items = (Array.isArray(j.data) ? j.data : []).map(x => ({
+      tid: Number(x.tid) || 0,
+      name: String(x.name || '').slice(0, 60),
+      author: String(x.nickname || '').slice(0, 30),
+      model: x.type === 'alex' ? 'slim' : 'classic',
+      likes: Number(x.likes) || 0,
+      hd: !!x.hd,
+      url: st.base + '/raw/' + Number(x.tid)
+    })).filter(x => x.tid > 0);
+    const res = { source: src, page, items, hasNext: items.length >= 15 };
+    SKIN_STATION_CACHE.set(key, { at: Date.now(), res });
+    if (SKIN_STATION_CACHE.size > 60) {
+      const oldest = [...SKIN_STATION_CACHE.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) SKIN_STATION_CACHE.delete(oldest[0]);
+    }
+    return Object.assign({ ok: true }, res);
+  } catch (e) { return { ok: false, error: '网络错误：' + e.message }; }
+});
+/* 抓一张皮肤图并回 dataURL（不落盘、不入库）——前端先预览，用户点"存库/套用"才写 */
+ipcMain.handle('skin:grab', async (_e, p) => {
+  const url = String((p && p.url) || '').trim();
+  if (!/^https?:\/\//i.test(url)) return { ok: false, error: '请填 http(s) 开头的图片地址' };
+  let u = null;
+  try { u = new URL(url); } catch (_) { return { ok: false, error: '地址无效' }; }
+  if (skinUrlHostBlocked(u.hostname)) return { ok: false, error: '不支持内网 / 本地地址' };
+  try {
+    const r = await netFetch(url, { headers: { Accept: 'image/png,image/*' } }, 20000);
+    if (!r.ok) return { ok: false, error: '下载失败（HTTP ' + r.status + '）' };
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 3 * 1024 * 1024) return { ok: false, error: '图片太大（超过 3MB）' };
+    const dim = pngSize(buf);
+    const bad = skinShapeOk(dim);
+    if (bad) return { ok: false, error: bad };
+    return { ok: true, png: 'data:image/png;base64,' + buf.toString('base64'), size: buf.length, dim };
+  } catch (e) { return { ok: false, error: '网络错误：' + e.message }; }
+});
+/* 本地挑一张图（只在内存里读出来给前端预览；存库由 skinlib:add-png 负责） */
+ipcMain.handle('skinlib:pick-file', async () => {
+  try {
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择皮肤图片（64x64 / 64x32，HD 整数倍也行）',
+      filters: [{ name: '皮肤 PNG', extensions: ['png'] }],
+      properties: ['openFile']
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    const fp = r.filePaths[0];
+    const st = fs.statSync(fp);
+    if (st.size > 3 * 1024 * 1024) return { ok: false, error: '文件太大（超过 3MB）' };
+    const buf = fs.readFileSync(fp);
+    const dim = pngSize(buf);
+    const bad = skinShapeOk(dim);
+    if (bad) return { ok: false, error: bad };
+    return {
+      ok: true, png: 'data:image/png;base64,' + buf.toString('base64'), size: buf.length, dim,
+      name: path.basename(fp).replace(/\.png$/i, '').slice(0, 40)
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 /* 冒烟测试专用（仅设置 LMC_SMOKE_SKIN=1 时注册）：直接启动皮肤服务器 / 取注入参数 /
    直接查询注册表与本地服务应答（本地签名服务的回归靠这几个口子） */

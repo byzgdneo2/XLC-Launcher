@@ -124,8 +124,12 @@ contextBridge.exposeInMainWorld('lmc', {
   skinLibRename: (p) => ipcRenderer.invoke('skinlib:rename', p),
   skinLibRemove: (p) => ipcRenderer.invoke('skinlib:remove', p),
   skinLibApply: (p) => ipcRenderer.invoke('skinlib:apply', p),
+  skinLibPickFile: () => ipcRenderer.invoke('skinlib:pick-file'),
   /* 按玩家名从正版拉皮肤（名字 → UUID → 档案 → textures.SKIN） */
   skinLookup: (p) => ipcRenderer.invoke('skin:lookup', p),
+  /* 第三方皮肤站（离线账户可用的公开皮肤库） */
+  skinStationList: (p) => ipcRenderer.invoke('skin:station-list', p),
+  skinGrab: (p) => ipcRenderer.invoke('skin:grab', p),
   /* 设置页「配置迁移与缓存」：把偏好导出成文件 / 从文件导入 / 清理下载与图标缓存 */
   exportConfig: () => ipcRenderer.invoke('config:export'),
   importConfig: () => ipcRenderer.invoke('config:import'),

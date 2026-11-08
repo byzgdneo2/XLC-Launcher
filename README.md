@@ -28,7 +28,8 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 1.4-snapshot3 | `XLC-Launcher-1.4-snapshot3-portable.exe` | 快照版（最新）：下载页新增「皮肤」分类（按正版玩家名抓 Mojang 官方皮肤）、账户设置新增皮肤库与六种动作预览；修复存档区块预览只能画成正方形；更新公告只留当前版本。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4-snapshot4 | `XLC-Launcher-1.4-snapshot4-portable.exe` | 快照版（最新）：下载页皮肤改成三种来源（皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤）；皮肤库安全收口 —— 按 URL 导入拦内网/回环地址、改名补路径校验。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4-snapshot3 | `XLC-Launcher-1.4-snapshot3-portable.exe` | 上一快照：下载页新增「皮肤」分类（按正版玩家名抓 Mojang 官方皮肤）、账户设置新增皮肤库与六种动作预览；修复存档区块预览只能画成正方形；更新公告只留当前版本。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot2 | `XLC-Launcher-1.4-snapshot2-portable.exe` | 上一快照：修中文名导致账户列表清空、下载卡 94%、整合包装不进实例、Fabric 实例缺加载器启动报 KnotClient；新增「补全文件」；接管系统代理。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot1 | `XLC-Launcher-1.4-snapshot1-portable.exe` | 上一快照：功能开关搬进设置项，装上「下载恢复器」插件（`XLC-Plugin-download-rescue-2.0.0.zip`）就能把下架的下载页放回来 |
 | 1.3.1 | `XLC-Launcher-1.3.1-portable.exe` | 正式版，建议日常使用：默认皮肤换成游戏里真正的史蒂夫贴图 |

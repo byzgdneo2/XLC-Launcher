@@ -332,16 +332,48 @@
           <div class="pager" id="spPager"></div>
         </div>
         <div id="skArea" style="display:none">
-          <div class="dl-res-head">
-            <div class="searchbox">
-              <svg class="ic sm"><use href="#i-search"/></svg>
-              <input type="text" id="skSearch" placeholder="输入正版玩家名，抓他的皮肤（如 Notch）…">
-            </div>
-            <button class="btn primary" id="skGo"><svg class="ic sm"><use href="#i-download"/></svg> 查找皮肤</button>
+          <div class="skin-src" id="skSrc">
+            <button class="skin-src-btn on" data-src="station"><b>皮肤库</b><span>离线账户也能用</span></button>
+            <button class="skin-src-btn" data-src="mojang"><b>正版档案</b><span>按正版玩家名查</span></button>
+            <button class="skin-src-btn" data-src="local"><b>本地文件</b><span>自己的图 / 直链</span></button>
           </div>
-          <div class="res-note">按玩家名查 <b>Mojang 官方档案</b>（名字 → UUID → 档案 → 皮肤直链），抓到的皮肤先进 <b>皮肤库</b>，再套给离线账户。正版 / 外置登录账户的皮肤由认证服务器提供，本地皮肤对它们不生效。</div>
-          <div class="skin-hot" id="skHot"></div>
-          <div id="skResult"><div class="empty-sm">输入一个正版玩家名开始，或点上面的推荐</div></div>
+
+          <div id="skPaneStation">
+            <div class="dl-res-head">
+              <div class="searchbox">
+                <svg class="ic sm"><use href="#i-search"/></svg>
+                <input type="text" id="stSearch" placeholder="搜作品名 / 作者名，留空看热门…">
+              </div>
+              <button class="btn primary" id="stGo"><svg class="ic sm"><use href="#i-search"/></svg> 搜索</button>
+              <button class="btn ghost" id="stSort">热门优先</button>
+            </div>
+            <div class="res-note">来自 <b>LittleSkin</b> 公开皮肤库，<b>不需要正版账户</b>：挑中后「存到皮肤库」留着慢慢用，或直接「套用」给离线账户。</div>
+            <div id="stList" class="skin-grid"><div class="empty-sm">正在读取皮肤库…</div></div>
+            <div class="skin-more"><button class="btn ghost sm" id="stMore" style="display:none">加载更多</button></div>
+          </div>
+
+          <div id="skPaneMojang" style="display:none">
+            <div class="dl-res-head">
+              <div class="searchbox">
+                <svg class="ic sm"><use href="#i-search"/></svg>
+                <input type="text" id="skSearch" placeholder="输入正版玩家名，抓他的皮肤（如 Notch）…">
+              </div>
+              <button class="btn primary" id="skGo"><svg class="ic sm"><use href="#i-download"/></svg> 查找皮肤</button>
+            </div>
+            <div class="res-note">按玩家名查 <b>Mojang 官方档案</b>（名字 → UUID → 档案 → 皮肤直链），抓到的皮肤先进 <b>皮肤库</b>，再套给离线账户。正版 / 外置登录账户的皮肤由认证服务器提供，本地皮肤对它们不生效。</div>
+            <div class="skin-hot" id="skHot"></div>
+            <div id="skResult"><div class="empty-sm">输入一个正版玩家名开始，或点上面的推荐</div></div>
+          </div>
+
+          <div id="skPaneLocal" style="display:none">
+            <div class="skin-drop" id="skDrop">
+              <div class="skin-drop-t">把皮肤 PNG 拖到这里</div>
+              <button class="btn primary sm" id="skPick">选择文件…</button>
+              <div class="skin-drop-tip">支持 64×64 / 64×32；128 / 256 的 HD 皮肤会自动缩到 64</div>
+            </div>
+            <div class="skin-lib-url"><input id="skUrl" placeholder="或粘贴图片直链（https://….png）"><button class="btn ghost sm" id="skUrlGo">读取</button></div>
+            <div id="skLocalResult"></div>
+          </div>
         </div>
       </section>
 
