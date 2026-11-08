@@ -151,6 +151,7 @@ try {
    → **1.4-snapshot2（修四类实操问题：中文名把账户列表清空、下载卡在 94%、整合包装进实例目录并验证通过、Fabric 实例缺加载器本体导致启动即崩；整合包不再随下载页下架，只留下载页交给插件；另接管系统代理，开着 VPN/代理也能下载）**
    → **1.4-snapshot3（下载页新增「皮肤」分类：按正版玩家名抓 Mojang 官方皮肤；账户设置新增皮肤库与动作预览（站立 / 行走 / 奔跑 / 潜行 / 持物 / 穿甲）；修复存档区块预览只能画成正方形、地形被拉伸的问题）**
    → **1.4-snapshot4（下载页皮肤改成三种来源：皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤；皮肤库安全收口：按 URL 导入拦内网/回环地址（防 SSRF）、改名补路径校验；版本列表「置顶区」测试断言适配「下载游戏」下架）**
+   → **1.4-snapshot5（整合包导入实测修复：分段下载不再永久卡死（本段收满即走 + 空闲超时）、Fabric/Quilt 加载器 maven 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名、进度区分 mod / 资源包 / 光影；导入时右下角浮窗补上整体进度：读包 0~6 / 装游戏 6~70 / 还原文件 70~99 一条线、百分比只前进，还原阶段逐文件推进不再「停在 100%」；浮窗收尾不再被迟到事件复活（导入完成后自己关掉，停止下载不会再被标成「导入失败」）；移除极速模式与侧栏左下角的字母小圆圈（老配置里的旧字段直接忽略））**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -159,7 +160,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.4-snapshot4';
+const APP_VERSION = '1.4-snapshot5';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -237,7 +238,6 @@ const DEFAULT_CONFIG = {
   bgColor: '',            // 自定义背景颜色（空=默认主题）
   accentColor: '',        // 自定义窗口/主题色（空=默认绿）
   bgImage: '',            // 自定义背景图文件名（存 DATA_DIR/personalize/）
-  turboMode: false,       // 极速模式：动画特效压到最低 + 收缩 Mod 搜索缓存（左下角小圆长按 10 秒开关，默认关）
   translatorBing: false,   // 模组翻译器：是否启用备用通道（Bing 网页接口）。默认关，走 MyMemory 官方免费接口
   /* 最近游玩（游戏进程成功拉起后记录，同名去重，最多 5 条） */
   recent: [],
@@ -449,6 +449,9 @@ ipcMain.handle('instance:rename', async (_e, p) => {
     const jsonNew = path.join(dst, to + '.json');
     const j = JSON.parse(await fsp.readFile(jsonOld, 'utf8'));
     j.id = to;
+    /* 用户主动改了名字 → 丢掉整合包带来的展示名（xlcTitle），否则界面还显示原来的包名，
+       看起来像「改名没生效」。没这个字段时 delete 无副作用。 */
+    delete j.xlcTitle;
     await fsp.writeFile(jsonNew, JSON.stringify(j, null, 2));
     if (jsonOld !== jsonNew && fs.existsSync(jsonOld)) await fsp.rm(jsonOld, { force: true });
     const jarOld = path.join(dst, from + '.jar');
@@ -1290,7 +1293,35 @@ try {
 
 let win = null;
 const SMOKE = process.argv.includes('--lmc-smoke');
+/* ---------------- 整体进度窗口（导入 / 安装整合包时用） ----------------
+   一次导入由好几段子流程拼起来：读包 → 装游戏本体 / 加载器 → 下包内文件 → 还原包内文件。
+   每段自己都从 0% 走到 100%，但界面要的是**一条不回头的整体进度**：
+   以前浮窗会「100% → 8% → 100%」乱跳，还原阶段又因为整包同步解压把主进程占住，
+   事件根本发不出去 —— 用户看到的就是「导入时浮窗一直停在 100%，不显示进度」。
+   progWinPush(base, span) 把当前这段的 0~100% 映射进整体的 [base, base+span]，
+   换算只发生在 send('install:progress') 这一处，深层的安装函数不用知道整体长什么样。 */
+let PROG_WIN = null;
+function progWinPush(base, span) {
+  const prev = PROG_WIN;
+  PROG_WIN = { base: Number(base) || 0, span: Number(span) || 0 };
+  return () => { PROG_WIN = prev; };            /* 必须在 finally 里 pop，别把窗口漏给下一次安装 */
+}
+function progMapPct(pct) {
+  if (!PROG_WIN) return pct;
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  return Math.round(PROG_WIN.base + (p * PROG_WIN.span) / 100);
+}
 function send(ch, payload) {
+  /* 带窗口时把子流程的百分比折算成整体百分比（install:speed 是字节量，不参与换算） */
+  if (ch === 'install:progress' && PROG_WIN && payload && typeof payload === 'object') {
+    const pct = progMapPct(payload.percent || 0);
+    payload = Object.assign({}, payload, { percent: pct });
+    /* 子流程（装游戏本体 / 加载器）自己的「安装完成」在整体里才走到一半：
+       文案跟着改成「就绪」，别让浮窗一边写「安装完成」一边还在 71% 往回跳。 */
+    if (payload.stage === 'done' && pct < 100) {
+      payload = Object.assign({}, payload, { stage: 'ready', text: '游戏本体与加载器就绪' });
+    }
+  }
   /* install:speed 每 500ms 一条，自测时刷屏没意义（判定只看落盘结果的 [UI-JS] 标记），跳过日志 */
   if (SMOKE && ch !== 'install:speed') console.log('[ipc:' + ch + '] ' + (typeof payload === 'string' ? payload : JSON.stringify(payload)));
   if (win && !win.isDestroyed()) win.webContents.send(ch, payload);
@@ -1305,7 +1336,7 @@ function send(ch, payload) {
    各阶段用 phaseBegin(name, 总字节) 报出总量，于是 剩余时间 = (总 - 已下) / 速度，才有意义。 */
 const netStat = { real: 0, done: 0 };
 let netPhase = { name: '', startDone: 0, total: 0 };
-let netBps = 0, netLastReal = 0, netLastT = 0, netTimer = null;
+let netBps = 0, netLastReal = 0, netLastT = 0, netTimer = null, netQuiet = false;
 /* netTimer 是**刻意常驻**的进程级采样器（500ms 一次，算下载瞬时速度），随进程退出而结束，
    不需要 clearInterval —— 机械检查里「有 setInterval 没配对 clear」报在这里是预期内（审计 N6）。 */
 function netAddReal(n) { netStat.real += n; netStat.done += n; }
@@ -1314,6 +1345,7 @@ function netReset() {
   netStat.real = 0; netStat.done = 0; netBps = 0;
   netLastReal = 0; netLastT = Date.now();
   netPhase = { name: '', startDone: 0, total: 0 };
+  netQuiet = false;
 }
 /* ---------------- 下载限速（设置 → 下载 → 速度限制，KB/s；0 = 不限速） ----------------
  * 令牌桶：按真实下载字节数扣令牌，桶空了就等，等到下一批令牌攒够再放行。
@@ -1353,7 +1385,10 @@ function netTick() {
   netLastReal = netStat.real; netLastT = now;
   netBps = netBps ? netBps * 0.55 + inst * 0.45 : inst;   /* EMA 平滑，避免数字乱跳 */
   if (netBps < 4096) netBps = 0;   /* 低于 4KB/s 视为断了：既不显示 0.0 MB/s，也不给出天文数字的剩余时间 */
-  if (netBps > 0) send('install:speed', netSnap());
+  if (netBps > 0) { netQuiet = false; send('install:speed', netSnap()); return; }
+  /* 速度掉到 0 时补发一条 0：否则界面会一直挂着上个阶段的「↓ x MB/s」，
+     进入读包 / 还原文件这类纯本地阶段后那个数字既不动也不对。 */
+  if (!netQuiet) { netQuiet = true; send('install:speed', netSnap()); }
 }
 function setStatus(text, busy) { send('app:status', { text: text || '就绪', busy: !!busy }); }
 
@@ -1611,34 +1646,74 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
     const pct = Math.floor(got / total * 100);
     if (pct !== lastPct) { lastPct = pct; onProgress(pct, got, total); }
   };
+  /* 分段读取的三个保命措施（审计 P1-1，实测症状：临时文件字节数已与索引声明完全一致，
+     进度却永远停在「整合包文件 5/80」，等 12 分钟零增长、进程也不报错）：
+       ① 每段自带空闲超时 —— 25 秒没收到任何字节就掐断这条连接，交给上层续传重试；
+       ② 本段字节收满就立刻跳出读循环，不等服务端 close / FIN（有些 CDN 节点发完数据后
+          连接一直挂着，reader.read() 永不返回，Promise.all 就永远不 resolve）；
+       ③ 每段每次尝试自建 AbortController，外部「停止安装」与本地超时都走它，
+          并在结束时摘掉监听（否则 16 段 × 3 次重试会把 AbortSignal 的监听器堆到告警线）。 */
   async function fetchSeg(i) {
     const start = i * segSize, end = Math.min(total, start + segSize) - 1;
     if (start > end) return;
+    const need = end + 1 - start;      /* 本段应有的总字节数 */
     let got = segGot[i];
     for (;;) { /* 连接被提前掐断时从中断处续传 */
       if (aborted) throw new Error('aborted');
-      const res = await fetch(url, { headers: { 'User-Agent': UA_STR, Range: 'bytes=' + (start + got) + '-' + end }, redirect: 'follow', signal });
-      /* 分段必须拿到 206：若服务器无视 Range 回 200，body 从 0 开始，写进分段会损坏文件 */
-      if (res.status !== 206) throw new Error('RANGE_UNSUPPORTED (HTTP ' + res.status + ' seg ' + i + ')');
-      const ws = fs.createWriteStream(tmp, { flags: 'r+', start: start + got });
-      const guard = wsErrGuard(ws);
-      const reader = res.body.getReader();
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (aborted) throw new Error('aborted');
-          got += value.length; segGot[i] = got;
-          netAddReal(value.length);   /* 多线程分段同样计入实时流量 */
-          await speedThrottle(value.length);   /* 限速（0 = 不限速；分段并发时按段各自扣令牌） */
-          if (!ws.write(value)) await guard.wait(new Promise(r => ws.once('drain', r)));
-          report();
-        }
-      } finally {
-        try { await reader.cancel(); } catch (_) {}
-        await guard.wait(new Promise(r => ws.end(r)));
+      const ac = new AbortController();
+      const onOuter = () => { try { ac.abort(); } catch (_) {} };
+      if (signal) {
+        if (signal.aborted) ac.abort();
+        else signal.addEventListener('abort', onOuter, { once: true });
       }
-      if (start + got >= end + 1) return;
+      let idle = null, stalled = false;
+      const touch = () => {
+        if (idle) clearTimeout(idle);
+        idle = setTimeout(() => { stalled = true; try { ac.abort(); } catch (_) {} }, DL_IDLE_MS);
+      };
+      const detach = () => {
+        if (idle) { clearTimeout(idle); idle = null; }
+        if (signal) signal.removeEventListener('abort', onOuter);
+      };
+      let ws = null, guard = null;
+      try {
+        touch();
+        const res = await fetch(url, { headers: { 'User-Agent': UA_STR, Range: 'bytes=' + (start + got) + '-' + end }, redirect: 'follow', signal: ac.signal });
+        /* 分段必须拿到 206：若服务器无视 Range 回 200，body 从 0 开始，写进分段会损坏文件 */
+        if (res.status !== 206) throw new Error('RANGE_UNSUPPORTED (HTTP ' + res.status + ' seg ' + i + ')');
+        ws = fs.createWriteStream(tmp, { flags: 'r+', start: start + got });
+        guard = wsErrGuard(ws);
+        const reader = res.body.getReader();
+        try {
+          for (;;) {
+            touch();
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (aborted) throw new Error('aborted');
+            got += value.length; segGot[i] = got;
+            netAddReal(value.length);   /* 多线程分段同样计入实时流量 */
+            await speedThrottle(value.length);   /* 限速（0 = 不限速；分段并发时按段各自扣令牌） */
+            touch();                    /* 限速本身可能占用较久，别把自己的限速误判成停滞 */
+            if (!ws.write(value)) await guard.wait(new Promise(r => ws.once('drain', r)));
+            report();
+            if (got >= need) break;     /* ② 本段收满即走，不等 done */
+          }
+        } finally {
+          try { await reader.cancel(); } catch (_) {}
+          await guard.wait(new Promise(r => ws.end(r)));
+        }
+      } catch (e) {
+        if (ws) { try { ws.destroy(); } catch (_) {} }
+        detach();
+        if (stalled && !(signal && signal.aborted)) {
+          const se = new Error('分段 ' + i + ' 连接停滞（' + Math.round(DL_IDLE_MS / 1000) + ' 秒没收到数据）');
+          se.stalled = true;
+          throw se;
+        }
+        throw e;
+      }
+      detach();
+      if (got >= need) return;
       if (got === 0) throw new Error('分段 ' + i + ' 无数据返回');
     }
   }
@@ -1649,6 +1724,9 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
           try { await fetchSeg(i); return; }
           catch (e) {
             if (aborted || (signal && signal.aborted)) throw new Error('aborted');
+            /* 停滞说明这条连接已经死了：再试一次（带 Range 从断点续），
+               两条连接都停滞就交给 downloadBig 回退单流 —— 没必要在这里耗满 3×25 秒 */
+            if (e.stalled && a >= 1) throw new Error('分段 ' + i + ' 连续停滞: ' + e.message);
             if (a === 2) throw new Error('分段 ' + i + ' 重试 3 次仍失败: ' + e.message);
             await new Promise(r => setTimeout(r, 400 * (a + 1)));
           }
@@ -1695,7 +1773,12 @@ function mapUrl(u) {
       .replace('https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com')
       .replace('https://piston-data.mojang.com', 'https://bmclapi2.bangbang93.com')
       .replace('https://launcher.mojang.com', 'https://bmclapi2.bangbang93.com')
-      .replace('https://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/assets');
+      .replace('https://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/assets')
+      /* 加载器的 maven 也一起镜像：境内直连 maven.fabricmc.net 实测只有 ~1KB/s，
+         34KB 要 40 秒 —— 一个 Fabric 整合包光加载器依赖就得等十几分钟甚至超时（审计 P1-2）。
+         镜像路径 /maven/<group path> 实测同一批 jar 4 秒下完。 */
+      .replace('https://maven.fabricmc.net', 'https://bmclapi2.bangbang93.com/maven')
+      .replace('https://maven.quiltmc.org/repository/release', 'https://bmclapi2.bangbang93.com/maven');
   }
   return u;
 }
@@ -1729,7 +1812,12 @@ function mirrorAltUrl(u) {
     .replace('https://resources.download.minecraft.net', 'https://bmclapi2.bangbang93.com/assets')
     .replace('https://piston-data.mojang.com', 'https://bmclapi2.bangbang93.com')
     .replace('https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com')
-    .replace('https://piston-meta.mojang.com', 'https://bmclapi2.bangbang93.com');
+    .replace('https://piston-meta.mojang.com', 'https://bmclapi2.bangbang93.com')
+    /* 加载器 maven 兜底（审计 P1-2）：Fabric / Quilt 官方源在境内常常「连得上但几乎不给数据」，
+       以前这里只映射 Mojang 四个域名，加载器 jar 与 sponge-mixin/asm 一批依赖没有任何替代源，
+       于是整个 Fabric 整合包卡在加载器阶段必失败 —— 用户看到的就是「PCL 能装、XLC 装不上」。 */
+    .replace('https://maven.fabricmc.net', 'https://bmclapi2.bangbang93.com/maven')
+    .replace('https://maven.quiltmc.org/repository/release', 'https://bmclapi2.bangbang93.com/maven');
 }
 const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -1879,11 +1967,33 @@ function extractZipEntries(zipBuf, outDir, filterFn) {
 }
 
 /* ---------------- ZIP 写入 / 定点读取（整合包导出导入，实现见 zipio.js） ---------------- */
-const { buildZip, findZipEntries, zipReadEntry, extractZipPrefix, crc32, listZipNames } = require('./zipio');
+const { buildZip, findZipEntries, listZipEntries, readZipEntry, zipReadEntry, extractZipPrefix, crc32, listZipNames } = require('./zipio');
 /* 版本名清洗：仅字母数字与 . _ -（防路径穿越） */
 function sanitizeVersionId(s) {
   const v = String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._-]+/, '').slice(0, 60);
   return v;
+}
+/* 展示名：目录名必须是 ASCII（避免编码问题），但包名里的中文不该跟着一起被洗掉 ——
+   「PCL导出包测试」被 sanitizeVersionId 洗成「PCL_」，目录叫这个可以，界面显示这个就不行（审计 P3-2）。
+   这里保留中文，只去掉路径分隔符、通配符与控制字符。 */
+function packTitleName(s) {
+  return String(s || '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+}
+/* 把展示名写进版本 json 的 xlcTitle（dir:scan 读出来带给界面；目录名 / 版本 id 仍是 ASCII）。
+   失败只记日志，不影响安装 —— 展示名是锦上添花，不能因为它让整个导入失败。 */
+async function setInstanceTitle(versionId, title) {
+  const t = packTitleName(title);
+  if (!t || !versionId || t === versionId) return;
+  const f = path.join(config.gameDir, 'versions', versionId, versionId + '.json');
+  try {
+    const j = JSON.parse(await fsp.readFile(f, 'utf8'));
+    j.xlcTitle = t;
+    await fsp.writeFile(f, JSON.stringify(j, null, 2));
+  } catch (e) { logLine('[install] 写入展示名失败（不影响安装）: ' + e.message); }
 }
 /* 把已安装版本目录改名（Forge/NeoForge 安装器产物固定名，需要改名以支持自定义版本名） */
 async function renameInstalledVersion(oldId, newName) {
@@ -2103,8 +2213,14 @@ async function installFabricLike(gameVer, kind, customName, opt) {
   let pick = list[0];
   if (wantLoader) {
     const hit = list.find(x => x && x.loader && String(x.loader.version) === wantLoader);
-    if (!hit) throw new Error((kind === 'fabric' ? 'Fabric' : 'Quilt') + ' 未找到加载器版本 ' + wantLoader +
-      '（' + gameVer + ' 可用: ' + list.slice(0, 3).map(x => x.loader && x.loader.version).filter(Boolean).join(' / ') + ' …）');
+    if (!hit) {
+      const e = new Error((kind === 'fabric' ? 'Fabric' : 'Quilt') + ' 未找到加载器版本 ' + wantLoader +
+        '（' + gameVer + ' 可用: ' + list.slice(0, 3).map(x => x.loader && x.loader.version).filter(Boolean).join(' / ') + ' …）');
+      /* 打标记而不是靠比字符串：整合包导入要区分「用户手选的版本装不上」与
+         「包内声明的老版本上游已下架」，后者允许退回最新并明确提示（见 installMcWithLoader） */
+      e.buildMissing = true;
+      throw e;
+    }
     pick = hit;
   }
   const lm = pick.launcherMeta;
@@ -2384,8 +2500,10 @@ async function installForge(mcVer, customName, build, signal) {
   const { best, pick, branch } = pickForgeBuild(builds, want);
   /* 显式指定了构建但匹配不上 → 必须报错，不能退回最新（否则「选了版本却装成另一个」） */
   if (build && !best) {
-    throw new Error('未找到 Forge 构建 ' + build + '（' + mcVer + ' 可用示例: ' +
+    const e = new Error('未找到 Forge 构建 ' + build + '（' + mcVer + ' 可用示例: ' +
       [...builds].sort((a, b) => (b.build || 0) - (a.build || 0)).slice(0, 3).map(x => x.version).join(' / ') + ' …）');
+    e.buildMissing = true;   /* 整合包导入看到这个标记才会退回最新并提示，见 installMcWithLoader */
+    throw e;
   }
   /* maven 完整版本号：bmclapi 的 version 字段可能不带 MC 前缀（1.20.1 → "47.4.23"），
    * 也可能自带（1.7.10 → "1.7.10-10.13.4.1564"）；maven 路径 + 文件名都要补全并接 branch */
@@ -2604,7 +2722,11 @@ async function installNeoForge(mcVer, customName, build, signal) {
        以前要求必须匹配 ^\d+(\.\d+)*$，带 -beta 的版本永远选不中、还会静默退回最新。 */
     const bw = String(build).trim();
     const hit = candidates.find(c => String(c) === bw) || candidates.find(c => String(c).endsWith(bw));
-    if (!hit) throw new Error('NeoForge 未找到构建 ' + build + '（' + mcVer + ' 可用: ' + candidates.slice(-3).map(x => x.replace(/^.*-/, '')).join(' / ') + '）');
+    if (!hit) {
+      const e = new Error('NeoForge 未找到构建 ' + build + '（' + mcVer + ' 可用: ' + candidates.slice(-3).map(x => x.replace(/^.*-/, '')).join(' / ') + '）');
+      e.buildMissing = true;   /* 同 Forge：整合包导入据此退回最新并提示 */
+      throw e;
+    }
     v = hit;
   }
   const tmp = path.join(os.tmpdir(), 'neoforge-installer-' + v + '.jar');
@@ -2826,8 +2948,11 @@ function relayAbort(ext, ac) {
   if (ext.aborted) ac.abort();
   else ext.addEventListener('abort', () => ac.abort(), { once: true });
 }
-/* Modrinth CDN 文件下载：官方优先，首字节 10 秒未到/失败自动切镜像；两轮抗抖动 */
-async function mrDownload(url, dest, onProgress, extSignal) {
+/* Modrinth CDN 文件下载：官方优先，首字节 10 秒未到/失败自动切镜像；两轮抗抖动
+ * expectSha1：整合包索引里每个文件都带 hashes.sha1，传进来就按它校验（审计 P3-1）。
+ * 以前这条链全程不比对 —— 中间层返回错误内容、或截断后长度恰好一致时，
+ * 坏 jar 会被静默接受，用户只能等到启动崩溃才发现，而且不知道是哪个文件坏的。 */
+async function mrDownload(url, dest, onProgress, extSignal, expectSha1) {
   const attempts = mrBinUrls(url);
   let lastErr = null;
   for (let round = 0; round < 2; round++) {
@@ -2841,6 +2966,13 @@ async function mrDownload(url, dest, onProgress, extSignal) {
       const watchdog = setTimeout(() => { if (got === 0) ac.abort(); }, 10000);
       try {
         await downloadBig(a.url, dest, kick, ac.signal);
+        if (expectSha1) {
+          const real = await sha1File(dest);
+          if (real !== String(expectSha1).toLowerCase()) {
+            try { await fsp.unlink(dest); } catch (_) {}
+            throw new Error('SHA1 校验失败（期望 ' + String(expectSha1).slice(0, 10) + '… 实际 ' + real.slice(0, 10) + '…）');
+          }
+        }
         if (a.official) mrOfficialOk(); /* 官方成功才清除冷却窗口 */
         return;
       } catch (e) {
@@ -3597,10 +3729,8 @@ async function combinedSearchInner(query, type, mcVersion, loader, page) {
   /* 关键词只解析一次（词库 → 翻译，带缓存），两个源共用，避免同一句中文翻两遍 */
   const kws = await resolveKeywords(query);
   const zhMiss = !kws && hasCJK(query);
-  /* 极速模式（config.turboMode）：缓存条目上限 24→8、保存 5 分钟→2 分钟，降低常驻内存 */
-  const turbo = !!config.turboMode;
-  const ttl = turbo ? 2 * 60 * 1000 : COMBINED_TTL;
-  const cap = turbo ? 8 : 24;
+  const ttl = COMBINED_TTL;
+  const cap = 24;
   let ent = combinedCache.get(key);
   if (!ent || Date.now() - ent.at > ttl) {
     const [mr, cf] = await Promise.all([
@@ -3680,15 +3810,40 @@ ipcMain.handle('modrinth:search', async (_e, p) => {
     return { ok: true, hits: r.hits, total: r.total, zhQuery: r.zhQuery || '', zhMiss: !!r.zhMiss };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-/* 按加载器安装 MC 版本（整合包导入共用） */
-async function installMcWithLoader(mcVer, loader, customName) {
+/* 按加载器安装 MC 版本（整合包导入共用）
+ * opt.build      整合包里声明的加载器版本（Fabric/Quilt 的 loader.version、Forge/NeoForge 的构建号）
+ * opt.buildSoft  true = 指定的版本上游已找不到时退回最新并提示（整合包导入用），
+ *                false/省略 = 直接报错（界面手选版本用，静默换版本等于「选了不生效」）
+ * 以前这里只有 3 个参数，整合包里写的 fabric-loader 0.19.5 到这一层就被丢掉了 ——
+ * 包内声明 0.19.5、装出来却是 0.20.1（审计 P2-1 实测），mod 是按旧版编译的可能直接崩。 */
+async function installMcWithLoader(mcVer, loader, customName, opt) {
+  opt = opt || {};
   const meta = await findInManifest(mcVer);
-  switch ((loader || 'Vanilla').toLowerCase()) {
+  const build = String(opt.build || '').trim();
+  const kind = String(loader || 'Vanilla').toLowerCase();
+  const soft = !!opt.buildSoft;
+  const withBuild = { build, force: !!opt.force, cancelKey: opt.cancelKey, signal: opt.signal };
+  /* 指定版本装不上（上游已下架该构建）时：soft 模式退回最新 + 明确说一句；否则原样抛出 */
+  const fallback = async (e, retry) => {
+    if (!(soft && build && e && e.buildMissing)) throw e;
+    logLine('[install] 整合包声明 ' + loader + ' ' + build + ' 已不可用，退回最新构建：' + e.message);
+    toast('整合包要求的 ' + loader + ' ' + build + ' 上游已找不到，已改用最新构建（少数 MOD 可能不兼容）', 'warn');
+    return retry();
+  };
+  switch (kind) {
     case 'vanilla': return installVanillaFiles(meta, customName || mcVer);
-    case 'fabric': return installFabricLike(mcVer, 'fabric', customName);
-    case 'quilt': return installFabricLike(mcVer, 'quilt', customName);
-    case 'forge': return installForge(mcVer, customName);
-    case 'neoforge': return installNeoForge(mcVer, customName);
+    case 'fabric':
+      try { return await installFabricLike(mcVer, 'fabric', customName, withBuild); }
+      catch (e) { return fallback(e, () => installFabricLike(mcVer, 'fabric', customName, { force: withBuild.force, signal: withBuild.signal })); }
+    case 'quilt':
+      try { return await installFabricLike(mcVer, 'quilt', customName, withBuild); }
+      catch (e) { return fallback(e, () => installFabricLike(mcVer, 'quilt', customName, { force: withBuild.force, signal: withBuild.signal })); }
+    case 'forge':
+      try { return await installForge(mcVer, customName, build || undefined, opt.signal); }
+      catch (e) { return fallback(e, () => installForge(mcVer, customName, undefined, opt.signal)); }
+    case 'neoforge':
+      try { return await installNeoForge(mcVer, customName, build || undefined, opt.signal); }
+      catch (e) { return fallback(e, () => installNeoForge(mcVer, customName, undefined, opt.signal)); }
     default: throw new Error('整合包加载器暂不支持: ' + loader);
   }
 }
@@ -4031,21 +4186,87 @@ ipcMain.handle('world:target-dir', (_e, p) => {
   const dir = savesDirFor(inst);
   return { ok: true, dir, isolated: dir !== path.join(config.gameDir, 'saves') };
 });
-/* 下载并安装 Modrinth 整合包（.mrpack） */
-async function installModrinthIndex(index, packBuf, displayName, dlsig) {
+/* 从 mrpack 的 dependencies 读出加载器类型与版本（整合包导入用）。
+   单独抽成纯函数既是为了让 「包里写 0.19.5 就装 0.19.5」这条可被测试钉住（审计 P2-1），
+   也避免 installModrinthIndex 里一串 if/else 手滑把版本丢掉。 */
+function modpackLoaderOf(deps) {
+  deps = deps || {};
+  if (deps['fabric-loader']) return { loader: 'fabric', build: String(deps['fabric-loader']) };
+  if (deps['quilt-loader']) return { loader: 'quilt', build: String(deps['quilt-loader']) };
+  if (deps.forge) return { loader: 'forge', build: String(deps.forge) };
+  if (deps.neoforge) return { loader: 'neoforge', build: String(deps.neoforge) };
+  return { loader: 'vanilla', build: '' };
+}
+/* 整合包文件构成：进度文案别只说「文件 i/80」—— 80 里含资源包与光影，
+   用户会以为装了 80 个 MOD（审计 P3-3）。 */
+function packFileBreakdown(files) {
+  const cnt = { mod: 0, rp: 0, sp: 0, other: 0 };
+  for (const f of (files || [])) {
+    const p = String((f && f.path) || '');
+    if (/^mods\//i.test(p)) cnt.mod++;
+    else if (/^resourcepacks\//i.test(p)) cnt.rp++;
+    else if (/^shaderpacks\//i.test(p)) cnt.sp++;
+    else cnt.other++;
+  }
+  cnt.label = [
+    cnt.mod ? 'mod ' + cnt.mod : '',
+    cnt.rp ? '资源包 ' + cnt.rp : '',
+    cnt.sp ? '光影 ' + cnt.sp : '',
+    cnt.other ? '其它 ' + cnt.other : ''
+  ].filter(Boolean).join(' · ');
+  return cnt;
+}
+/* 把包里的 overrides/<prefix> 落到 destDir（跳过 .. 越界项）。
+   skipExisting=true 时不覆盖已存在的文件（Modrinth 分支：玩家自己的 options.txt 要留住）。 */
+function applyPackOverrides(buf, prefix, destDir, skipExisting) {
+  let copied = 0;
+  for (const it of findZipEntries(buf, n => n.startsWith(prefix) && !n.endsWith('/'))) {
+    const rel = it.name.slice(prefix.length);
+    if (!rel || /\.\./.test(rel)) continue;
+    const dest = path.join(destDir, rel);
+    if (skipExisting && fs.existsSync(dest)) continue;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, it.data);
+    copied++;
+  }
+  return copied;
+}
+/* 包装式导出包（PCL 勾了「打包启动器」）：外层根目录只有 modpack.mrpack + PCL/ + exe，
+   三个索引探测名全落空。取根目录那个 *.mrpack 读进内存，按 mrpack 再走一遍（审计 P2-2）。 */
+function unwrapMrpack(buf) {
+  let names = [];
+  try { names = listZipNames(buf); } catch (_) { return null; }
+  const inner = names.find(n => /^[^/]+\.mrpack$/i.test(n) && !n.endsWith('/'));
+  if (!inner) return null;
+  try {
+    const sub = zipReadEntry(buf, inner);
+    if (!findZipEntries(sub, n => n === 'modrinth.index.json').length) return null;
+    return { buf: sub, name: inner.replace(/\.mrpack$/i, ''), entry: inner };
+  } catch (_) { return null; }
+}
+/* 下载并安装 Modrinth 整合包（.mrpack）
+   win：这段安装占整体进度的哪一截（{base, span}，导入时读包要留出前面 6%）。默认整段 0~100。 */
+async function installModrinthIndex(index, packBuf, displayName, dlsig, win) {
+  const w = win || { base: 0, span: 100 };
   const deps = index.dependencies || {};
   const mcVer = deps.minecraft || deps['minecraft'];
-  let loader = 'vanilla';
-  if (deps['fabric-loader']) loader = 'fabric';
-  else if (deps['quilt-loader']) loader = 'quilt';
-  else if (deps.forge) loader = 'forge';
-  else if (deps.neoforge) loader = 'neoforge';
+  /* 加载器版本也要读出来传给安装器（审计 P2-1）：以前只取类型不取版本，
+     包里写 fabric-loader 0.19.5、装出来是 0.20.1 —— mod 按旧版编译的会直接崩，
+     而且整合包安装不经过界面下拉，用户没有任何补救手段。 */
+  const { loader, build: loaderBuild } = modpackLoaderOf(deps);
   const name = sanitizeVersionId(displayName || index.name || ('modpack-' + mcVer));
   prepareInstallSlot(config.gameDir, name); /* 已安装→友好提示；残留目录→自动归档 */
-  send('launch:log', '[整合包] 安装 Minecraft ' + mcVer + ' (' + loader + ') · 名称 ' + name);
+  send('launch:log', '[整合包] 安装 Minecraft ' + mcVer + ' (' + loader +
+    (loaderBuild ? ' ' + loaderBuild : '') + ') · 名称 ' + name);
   /* 注意：installMcWithLoader 走的是游戏安装那套（无取消信号），「停止」在这个阶段
      只能等到下一个整合包文件开始时才生效 —— 先这么用，深改游戏安装超本次范围 */
-  const versionId = await installMcWithLoader(mcVer, loader, name);
+  let versionId = '';
+  const popInstall = progWinPush(w.base, w.span * 0.7);   /* 装游戏本体 / 加载器：0~70% */
+  try {
+    versionId = await installMcWithLoader(mcVer, loader, name, { build: loaderBuild, buildSoft: true });
+  } finally { popInstall(); }
+  /* 包名里的中文别再一起丢掉：目录仍叫 name（ASCII），界面显示 xlcTitle */
+  await setInstanceTitle(versionId, displayName || index.name || name);
   const gd = config.gameDir;
   /* 整合包一律装进实例自己的目录（versions/<id>，PCL / HMCL 同款）：
      先建一个空 mods/，让「自动隔离」判定成立（instanceIsolated = 有 mods/ 或 saves/）。
@@ -4055,34 +4276,48 @@ async function installModrinthIndex(index, packBuf, displayName, dlsig) {
   await fsp.mkdir(path.join(instDir, 'mods'), { recursive: true });
   // mod 文件（path 相对游戏目录，禁止越界）
   const files = index.files || [];
-  let i = 0;
-  phaseBegin('modpack-files', files.reduce((s, f) => s + (f.fileSize || 0), 0));
-  for (const f of files) {
-    if (dlsig && dlsig.aborted) throw new Error('已取消');
-    i++;
-    if (!f.path || /\.\./.test(f.path) || path.isAbsolute(f.path)) continue;
-    const url = (f.downloads || [])[0];
-    if (!url) continue;
-    send('install:progress', { stage: 'modpack-files', current: i, total: files.length, percent: Math.round(i / files.length * 100), text: '整合包文件 ' + i + '/' + files.length });
-    const dest = path.join(instDir, f.path);
-    await mrDownload(url, dest, () => {}, dlsig);
-  }
+  const brk = packFileBreakdown(files);
+  const progressText = (i) => '整合包文件 ' + i + '/' + files.length + (brk.label.length > 1 ? '（' + brk.label + '）' : '');
+  const totalBytes = files.reduce((s, f) => s + (f.fileSize || 0), 0);
+  let i = 0, doneBytes = 0, lastPct = -1;
+  phaseBegin('modpack-files', totalBytes);
+  const popFiles = progWinPush(w.base + w.span * 0.7, w.span * 0.3);   /* 包内文件：70~100% */
+  try {
+    for (const f of files) {
+      if (dlsig && dlsig.aborted) throw new Error('已取消');
+      i++;
+      if (!f.path || /\.\./.test(f.path) || path.isAbsolute(f.path)) continue;
+      const url = (f.downloads || [])[0];
+      if (!url) continue;
+      /* 百分比按字节算（拿得到 fileSize 时），一个 200MB 的 mod 也不会让浮窗卡在同一个数上；
+         百分比取整没变就不重复发，免得每秒几十条 IPC 把渲染层刷爆 */
+      const report = (pct) => {
+        const p = Math.max(0, Math.min(99, pct));
+        if (p === lastPct) return;
+        lastPct = p;
+        send('install:progress', {
+          stage: 'modpack-files', current: i, total: files.length, percent: p,
+          title: '安装整合包', kind: 'modpack', text: progressText(i)
+        });
+      };
+      report(totalBytes ? Math.round(doneBytes / totalBytes * 100) : Math.round((i - 1) / files.length * 100));
+      const dest = path.join(instDir, f.path);
+      /* 索引里带了 hashes.sha1 就校验（审计 P3-1）：这条链以前全程不比对，坏 jar 会静默落盘 */
+      await mrDownload(url, dest, (pct, got) => {
+        report(totalBytes
+          ? Math.round((doneBytes + (got || 0)) / totalBytes * 100)
+          : Math.round((i - 1 + (got ? 1 : 0)) / files.length * 100));
+      }, dlsig, (f.hashes && f.hashes.sha1) || null);
+      doneBytes += f.fileSize || 0;
+      report(totalBytes ? Math.round(doneBytes / totalBytes * 100) : Math.round(i / files.length * 100));
+    }
+  } finally { popFiles(); }
   // overrides 覆盖到实例目录（options.txt 不覆盖已有）
   if (packBuf) {
-    const ovr = findZipEntries(packBuf, n => n.startsWith('overrides/') && !n.endsWith('/'));
-    let copied = 0;
-    for (const it of ovr) {
-      const rel = it.name.slice('overrides/'.length);
-      if (!rel || /\.\./.test(rel)) continue;
-      const dest = path.join(instDir, rel);
-      if (fs.existsSync(dest)) continue;
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, it.data);
-      copied++;
-    }
+    const copied = applyPackOverrides(packBuf, 'overrides/', instDir, true);
     send('launch:log', '[整合包] overrides 应用 ' + copied + ' 个文件（实例目录）');
   }
-  return { versionId, mods: files.length, isolated: true };
+  return { versionId, mods: brk.mod, files: files.length, isolated: true };
 }
 ipcMain.handle('modrinth:install-modpack', async (_e, p) => {
   const dlsig = p.jobKey ? dlSignalOf(p.jobKey) : null;
@@ -4097,10 +4332,20 @@ ipcMain.handle('modrinth:install-modpack', async (_e, p) => {
     if (!file || !/\.mrpack$/i.test(file.filename || '')) throw new Error('未找到 .mrpack 主文件');
     const tmp = path.join(os.tmpdir(), 'lmc-' + file.filename);
     setStatus('下载整合包: ' + file.filename, true);
-    await mrDownload(file.url, tmp, () => {}, dlsig);
+    /* 下载 .mrpack 本身也占进度（0~6%）：几百 MB 的包以前这里完全没动静，浮窗一出来就是 0% */
+    const popDl = progWinPush(0, 6);
+    try {
+      await mrDownload(file.url, tmp, (pct, got, total) => {
+        send('install:progress', {
+          stage: 'pack-dl', percent: pct >= 0 ? pct : 0,
+          title: '安装整合包', kind: 'modpack',
+          text: '下载 ' + file.filename + (pct >= 0 ? ' ' + pct + '%' : (got ? '（' + Math.round(got / 1048576) + ' MB' + (total ? ' / ' + Math.round(total / 1048576) + ' MB' : '') + '）' : ''))
+        });
+      }, dlsig);
+    } finally { popDl(); }
     const buf = await fsp.readFile(tmp);
     const index = JSON.parse(zipReadEntry(buf, 'modrinth.index.json').toString('utf8'));
-    const r = await installModrinthIndex(index, buf, p.name || vers[0].name || p.projectId, dlsig);
+    const r = await installModrinthIndex(index, buf, p.name || vers[0].name || p.projectId, dlsig, { base: 6, span: 94 });
     await fsp.unlink(tmp).catch(() => {});
     setStatus('就绪');
     toast('整合包安装完成: ' + r.versionId);
@@ -4427,7 +4672,11 @@ async function buildModpackBuffer(versionId, opts) {
   const manifest = {
     format: 'lmc-modpack', formatVersion: 3, name: versionId,
     packName: opts.name || versionId, packVersion: opts.version || '',
-    mcVersion: chain.rootId, loader, modsCount,
+    mcVersion: chain.rootId, loader,
+    /* 记下导出时的加载器版本：导入端按它装，mod 才不会因为「装成最新加载器」翻车（审计 P2-1）。
+       老包没有这个字段，读出来是空串 → 仍装最新，行为与以前一致。 */
+    loaderVersion: detectLoaderVer(chain.json) || '',
+    modsCount,
     isolated: !!isolated,
     options: argues.slice(), dyn: dynPaths.slice(),
     /* 兼容旧字段：老版本 XLC 的导入端只认 folders / includeOptions */
@@ -4443,34 +4692,65 @@ async function buildModpackBuffer(versionId, opts) {
 /* 核心：从 buffer 导入 LMC 格式整合包 */
 /* 把包里的文件按原路径还原到 instDir（已存在的文件不覆盖，避免冲掉玩家本机的东西）。
    formatVersion 2 起包里就是「实例目录相对路径」的原样快照，所以不再逐目录点名 ——
-   mods / options.txt / config / 资源包 / 光影 / 存档 / 地图 / 脚本 … 一视同仁。 */
-async function restoreLmcFiles(buf, instDir) {
+   mods / options.txt / config / 资源包 / 光影 / 存档 / 地图 / 脚本 … 一视同仁。
+   onProgress(done, total)：还原进度回调。以前这里是 findZipEntries(buf, () => true) ——
+   一次把整包同步解压完，几百 MB 的包能把主进程占住好几秒，浮窗的进度事件全堵在队列里；
+   现在先建中央目录索引、逐个条目按需解压，每个文件之间 await 让出事件循环，进度才发得出去。 */
+async function restoreLmcFiles(buf, instDir, onProgress) {
   const SKIP = new Set(['lmc-manifest.json', 'modrinth.index.json']);
-  let mods = 0, count = 0;
-  for (const it of findZipEntries(buf, () => true)) {
-    if (SKIP.has(it.name) || it.name.endsWith('/')) continue;
-    if (/\.\./.test(it.name) || path.isAbsolute(it.name)) continue;
-    const dest = path.join(instDir, it.name);
+  let ents;
+  try { ents = listZipEntries(buf); }
+  catch (e) { throw new Error('整合包解压失败：' + e.message); }   /* 坏包要报错，不许「导入成功但什么都没装」 */
+  const total = ents.filter(e => !SKIP.has(e.name)).length || ents.length;
+  let mods = 0, count = 0, i = 0;
+  for (const ent of ents) {
+    if (SKIP.has(ent.name)) continue;
+    i++;
+    const name = ent.name;
+    if (/\.\./.test(name) || path.isAbsolute(name)) continue;
+    const dest = path.join(instDir, name);
     const rel = path.relative(instDir, dest);
     if (!rel || rel.startsWith('..')) continue;
     try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch (_) { continue; }
-    if (fs.existsSync(dest)) continue;
-    try { await fsp.writeFile(dest, it.data); } catch (_) { continue; }
+    if (fs.existsSync(dest)) { if (onProgress) onProgress(i, total); continue; }
+    let data;
+    try { data = readZipEntry(buf, ent); } catch (_) { continue; }
+    try { await fsp.writeFile(dest, data); } catch (_) { continue; }
     count++;
-    if (/^mods\/[^/]+$/i.test(it.name)) mods++;
+    if (/^mods\/[^/]+$/i.test(name)) mods++;
+    if (onProgress) onProgress(i, total);
   }
-  return { mods, count };
+  return { mods, count, total: i };
 }
-async function importLmcPack(buf) {
+/* win：这段导入占整体进度的哪一截（{base, span}）。默认整段 0~100。 */
+async function importLmcPack(buf, win) {
+  const w = win || { base: 0, span: 100 };
   const man = JSON.parse(zipReadEntry(buf, 'lmc-manifest.json').toString('utf8'));
   const name = sanitizeVersionId(man.name);
   prepareInstallSlot(config.gameDir, name); /* 已安装→友好提示；残留目录→自动归档 */
-  const versionId = await installMcWithLoader(man.mcVersion, man.loader, name);
+  let versionId = '';
+  const popInstall = progWinPush(w.base, w.span * 0.7);   /* 装游戏本体 / 加载器：0~70% */
+  try {
+    versionId = await installMcWithLoader(man.mcVersion, man.loader, name,
+      { build: man.loaderVersion || '', buildSoft: true });
+  } finally { popInstall(); }
+  await setInstanceTitle(versionId, man.packName || man.name);
   const gd = config.gameDir;
   /* 隔离包（来自隔离实例）→ 内容放回新实例的 versions/<name>/ 里，保持隔离；
      普通包（来自非隔离实例）→ 放回游戏目录。导出时 manifest 里记了 isolated，这里照它走。 */
   const instDir = man.isolated ? path.join(gd, 'versions', versionId) : gd;
-  const r = await restoreLmcFiles(buf, instDir);
+  const popRestore = progWinPush(w.base + w.span * 0.7, w.span * 0.3);   /* 还原文件：70~100% */
+  let r;
+  try {
+    r = await restoreLmcFiles(buf, instDir, (done, total) => {
+      send('install:progress', {
+        stage: 'import-files', current: done, total,
+        percent: total ? Math.round(done / total * 100) : 0,
+        title: '导入整合包', kind: 'import',
+        text: '还原包内文件 ' + done + '/' + total
+      });
+    });
+  } finally { popRestore(); }
   return { versionId, mods: r.mods, extras: r.count - r.mods };
 }
 /* 界面渲染导出选项清单（PCL 式：可用性、默认勾选、每项命中的文件数/体积都在这里算好） */
@@ -4499,58 +4779,140 @@ ipcMain.handle('modpack:export', async (_e, versionId, opts) => {
     return { ok: true, path: r.filePath, mods: manifest.modsCount, files, bytes, warns: warns || [] };
   } catch (e) { setStatus('就绪'); return { ok: false, error: e.message }; }
 });
+/* 分块读整个包（GB 级的 .lmcmod 读盘要好几秒），顺路报「读了多少」——
+   以前是 fsp.readFile 一把梭：读盘这段时间浮窗一片空白，用户以为没反应。 */
+const fmtMb = (n) => ((n || 0) / 1048576).toFixed((n || 0) >= 10485760 ? 0 : 1) + ' MB';
+async function readFileProgress(fp, onProgress) {
+  const st = await fsp.stat(fp);
+  const total = st.size || 0;
+  const chunks = [];
+  let got = 0, lastPct = -1;
+  const rs = fs.createReadStream(fp, { highWaterMark: 4 * 1048576 });
+  for await (const c of rs) {
+    chunks.push(c);
+    got += c.length;
+    const pct = total ? Math.floor(got / total * 100) : 0;
+    if (onProgress && (pct !== lastPct || got === total)) { lastPct = pct; onProgress(got, total); }
+  }
+  return Buffer.concat(chunks, got);
+}
 ipcMain.handle('modpack:import', async () => {
   try {
-    const r = await dialog.showOpenDialog({
-      title: '导入整合包',
-      filters: [{ name: '整合包', extensions: ['lmcmod', 'mrpack', 'zip'] }],
-      properties: ['openFile']
-    });
+    /* 自测：LMC_SMOKE_IMPORT=<整合包路径>[;<第二个>…] 直接跳过系统「选文件」对话框（依次消费），
+       其余整条导入链（读盘 → 探测格式 → 安装 → 落盘）保持生产同一份代码。
+       导入进度浮窗这类「界面看得见」的问题，只有走真入口才测得到（审计 P4-1）。 */
+    let smokeImport = '';
+    if (SMOKE_EARLY && process.env.LMC_SMOKE_IMPORT) {
+      const q = String(process.env.LMC_SMOKE_IMPORT).split(';').filter(Boolean);
+      smokeImport = q.shift() || '';
+      process.env.LMC_SMOKE_IMPORT = q.join(';');
+    }
+    const r = smokeImport
+      ? { canceled: false, filePaths: [smokeImport] }
+      : await dialog.showOpenDialog({
+        title: '导入整合包',
+        filters: [{ name: '整合包', extensions: ['lmcmod', 'mrpack', 'zip'] }],
+        properties: ['openFile']
+      });
     if (r.canceled || !r.filePaths || !r.filePaths[0]) return { ok: false, canceled: true };
     const fp = r.filePaths[0];
     setStatus('导入整合包…', true);
-    const buf = await fsp.readFile(fp);
-    setStatus('导入整合包…', true);
+    /* 浮窗从「选完文件」那一刻就该出现：GB 级整合包光读盘就要好几秒，以前这段时间界面一声不响，
+       用户只看到状态栏闪了一下。这里分成四段，映射成一条 0~100 不回头的主进度：
+         读包 0~6% → 装游戏本体 / 加载器 6~70% → 还原包内文件 70~99% → 100% */
+    const packFile = path.basename(fp);
+    const popRead = progWinPush(0, 6);
+    let rawBuf;
+    try {
+      send('install:progress', {
+        stage: 'import-read', percent: 0, title: '导入整合包', kind: 'import',
+        text: '读取 ' + packFile
+      });
+      rawBuf = await readFileProgress(fp, (got, total) => {
+        send('install:progress', {
+          stage: 'import-read', title: '导入整合包', kind: 'import',
+          percent: total ? Math.round(got / total * 100) : 0,
+          text: '读取 ' + packFile + '（' + fmtMb(got) + (total ? ' / ' + fmtMb(total) : '') + '）'
+        });
+      });
+    } finally { popRead(); }
+    const packName = path.basename(fp).replace(/\.(lmcmod|mrpack|zip)$/i, '');
+    /* 格式探测先看「包里有没有那个索引」，而不是「装的时候有没有报错」：
+       以前三个分支是 try/catch 套 try/catch，只要 mrpack 装到一半失败（网断了 / 文件校验不过），
+       就会继续去试 CurseForge，最后统一抛「无法识别的整合包格式」—— 把真正的错因吞掉了。 */
+    const hasIn = (b, n) => {
+      try { zipReadEntry(b, n); return true; } catch (_) { return false; }
+    };
+    /* 包装式导出（PCL 的「打包启动器」勾选项）：外层根目录只有 modpack.mrpack + PCL/ + exe，
+       三个探测名全落空。这里先取内层按 mrpack 再走一遍（审计 P2-2）。 */
+    let buf = rawBuf, name = packName, wrapped = '';
+    if (!hasIn(rawBuf, 'lmc-manifest.json') && !hasIn(rawBuf, 'modrinth.index.json') && !hasIn(rawBuf, 'manifest.json')) {
+      /* 解内层 .mrpack 是同步解压，大包会卡住主进程几秒 —— 先让浮窗说一声在干嘛 */
+      send('install:progress', { stage: 'import-unwrap', percent: 6, title: '导入整合包', kind: 'import', text: '解包启动器包装…' });
+      const w = unwrapMrpack(rawBuf);
+      if (w) {
+        buf = w.buf; name = w.name; wrapped = w.entry;
+        logLine('[import] 检测到包装式导出包，内层 ' + w.entry + '（' + buf.length + ' 字节）');
+        toast('这是带启动器的包装包，已取内层 ' + w.entry + ' 继续安装');
+      }
+    }
     // LMC 自有格式
-    try {
-      const rr = await importLmcPack(buf);
+    if (hasIn(buf, 'lmc-manifest.json')) {
+      const rr = await importLmcPack(buf, { base: 6, span: 93 });
+      send('install:progress', { stage: 'done', percent: 100, title: '导入整合包', kind: 'import', text: '导入完成' });
       setStatus('就绪');
-      toast('整合包导入完成: ' + rr.versionId + '（' + rr.mods + ' 个 MOD）');
+      toast('整合包导入完成: ' + (rr.versionId) + '（' + rr.mods + ' 个 MOD）');
       return { ok: true, versionId: rr.versionId, mods: rr.mods };
-    } catch (_) { /* 不是 LMC 格式，继续尝试其他 */ }
-    // Modrinth mrpack
-    try {
+    }
+    // Modrinth mrpack（含包装包内层）
+    if (hasIn(buf, 'modrinth.index.json')) {
       const index = JSON.parse(zipReadEntry(buf, 'modrinth.index.json').toString('utf8'));
-      const rr = await installModrinthIndex(index, buf, path.basename(fp).replace(/\.(mrpack|zip)$/i, ''));
+      const rr = await installModrinthIndex(index, buf, name, undefined, { base: 6, span: 93 });
+      send('install:progress', { stage: 'done', percent: 100, title: '导入整合包', kind: 'import', text: '导入完成' });
       setStatus('就绪');
-      toast('Modrinth 整合包安装完成: ' + rr.versionId);
-      return { ok: true, versionId: rr.versionId, mods: rr.mods };
-    } catch (_) { /* 不是 mrpack */ }
+      toast('Modrinth 整合包安装完成: ' + rr.versionId +
+        (rr.files > rr.mods ? '（' + rr.files + ' 个文件 · 其中 mod ' + rr.mods + ' 个）' : '（' + rr.mods + ' 个 MOD）'));
+      return { ok: true, versionId: rr.versionId, mods: rr.mods, files: rr.files, wrapped: wrapped || undefined };
+    }
     // CurseForge zip（尽力而为：装版本 + 解 overrides，mod 需手动补）
-    try {
+    if (hasIn(buf, 'manifest.json')) {
       const man = JSON.parse(zipReadEntry(buf, 'manifest.json').toString('utf8'));
-      if (man.manifestType !== 'minecraftModpack') throw new Error('not CF');
+      if (man.manifestType !== 'minecraftModpack') throw new Error('不是 CurseForge 整合包（manifestType=' + man.manifestType + '）');
       const mcVer = man.minecraft && man.minecraft.version;
       const ml = (man.minecraft && man.minecraft.modloaders || []).find(x => x.primary) || (man.minecraft && man.minecraft.modloaders || [])[0];
-      const loader = ml && /^forge-(.+)/.test(ml.id) ? 'forge' : ml && /^neoforge-(.+)/.test(ml.id) ? 'neoforge' : 'vanilla';
-      const build = ml && /^forge-(.+)/.exec(ml.id) ? /^forge-(.+)/.exec(ml.id)[1] : '';
-      const name = sanitizeVersionId((man.name || 'cf-pack') + '-' + (man.version || mcVer));
-      const versionId = await installMcWithLoader(mcVer, loader, name);
+      const mlId = String((ml && ml.id) || '');
+      const loader = /^neoforge-/i.test(mlId) ? 'neoforge' : /^forge-/i.test(mlId) ? 'forge' : 'vanilla';
+      /* 构建号以前算了不用（审计 P2-3），这里连同 loader 一起传下去 */
+      const bm = /^(?:neo)?forge-(.+)$/i.exec(mlId);
+      const build = loader === 'vanilla' ? '' : (bm ? bm[1] : '');
+      const name2 = sanitizeVersionId((man.name || 'cf-pack') + '-' + (man.version || mcVer));
+      prepareInstallSlot(config.gameDir, name2);   /* 已安装→友好提示；残留目录→自动归档（与 Modrinth 分支同口径） */
+      let versionId = '';
+      const popCfInstall = progWinPush(6, 80);
+      try {
+        versionId = await installMcWithLoader(mcVer, loader, name2, { build, buildSoft: true });
+      } finally { popCfInstall(); }
+      await setInstanceTitle(versionId, man.name || name2);
       const gd = config.gameDir;
-      const prefix = (man.overrides || 'overrides') + '/';
-      const ovr = findZipEntries(buf, n => n.startsWith(prefix) && !n.endsWith('/'));
-      for (const it of ovr) {
-        const rel = it.name.slice(prefix.length);
-        if (!rel || /\.\./.test(rel)) continue;
-        const dest = path.join(gd, rel);
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, it.data);
-      }
+      /* overrides 落实例目录，并预建 mods/ 让隔离判定成立 ——
+         以前写游戏根目录：多个整合包互相覆盖、实例不被判为隔离、启动时退回根目录（审计 P2-3） */
+      const instDir = path.join(gd, 'versions', versionId);
+      await fsp.mkdir(path.join(instDir, 'mods'), { recursive: true });
+      const popCfFiles = progWinPush(86, 13);
+      let copied = 0;
+      try {
+        send('install:progress', { stage: 'import-files', percent: 20, title: '导入整合包', kind: 'import', text: '解压 overrides' });
+        copied = applyPackOverrides(buf, (man.overrides || 'overrides') + '/', instDir, false);
+      } finally { popCfFiles(); }
+      send('launch:log', '[整合包] CF overrides 应用 ' + copied + ' 个文件（实例目录）');
       const needMods = (man.files || []).length;
+      send('install:progress', { stage: 'done', percent: 100, title: '导入整合包', kind: 'import', text: '导入完成' });
       setStatus('就绪');
       toast('CurseForge 整合包已导入 ' + versionId + '；其中 ' + needMods + ' 个 MOD 需手动下载放入 mods 目录', 'warn');
       return { ok: true, versionId, warn: needMods ? needMods + ' 个 CurseForge MOD 需手动下载（CF 无公开直链）' : '' };
-    } catch (_) { throw new Error('无法识别的整合包格式（支持 XLC .lmcmod / Modrinth .mrpack / CurseForge .zip）'); }
+    }
+    throw new Error('无法识别的整合包格式（支持 XLC .lmcmod / Modrinth .mrpack / CurseForge .zip，' +
+      '以及 PCL 勾了「打包启动器」的外层 zip）');
   } catch (e) { setStatus('就绪'); return { ok: false, error: e.message }; }
 });
 
@@ -6276,6 +6638,9 @@ ipcMain.handle('dir:scan', async () => {
         const item = {
           id: json.id || sub,
           folder: sub,
+          /* 展示名：整合包导入时把包名（可能含中文）记在 xlcTitle 里，界面优先显示它。
+             目录名 / 版本 id 仍是 ASCII —— 中文目录在个别环境会让 cpSync / 安装器出怪问题（审计 P3-2）。 */
+          title: (typeof json.xlcTitle === 'string' ? json.xlcTitle : ''),
           loader: detectLoaderOf(json),
           /* version.json 自带的类型（release/snapshot/old_beta/old_alpha）——
              版本列表的方块图标要用；改过名 / 继承链上的实例渲染层还有清单匹配和 id 形状兜底 */
@@ -11005,48 +11370,81 @@ function updateParserSelfTest() {
  * 这里只保留「当前版本」一条：更新日志界面因此不再罗列一大串历史版本。
  * 首次以新版本运行时会自动弹出公告，设置 → 版本更新 里也能随时查看。
  * 每次发版：把 version 改成 APP_VERSION，替换掉这一条的内容即可（不用往里追加）。
- * 1.4-snapshot4 之前的 25 条历史公告原文照录在 docs/CHANGELOG-history.md，需要查旧记录去那里看。
+ * 1.4-snapshot5 之前的 26 条历史公告原文照录在 docs/CHANGELOG-history.md，需要查旧记录去那里看。
  * 公告属于当前版本：改完就往这条里加条目，别再动已经发出去的内容（那是改写历史）。 */
 const CHANGELOG = [
   {
-    version: '1.4-snapshot4',
-    date: '2026-11-07',
+    version: '1.4-snapshot5',
+    date: '2026-11-08',
     tag: '快照版',
-    notice: '1.4 第四个快照：下载页的皮肤不再只认正版 —— 新增「皮肤站 / 正版档案 / 本地文件」三种来源，离线账户也能直接搜皮肤站的作品、拖本地 PNG 换肤；同时给皮肤库补上两处安全收口，按 URL 导入会拦掉内网 / 回环地址，改名补上与删除同款的路径校验。',
+    notice: '1.4 第五个快照：这一版全在修整合包导入。最要命的一条是下载会永久卡住 —— 数据早就收完了，可服务端不关连接，启动器就一直等，进度条永远停在「整合包文件 5/80」，现在本段收满立刻走、真停滞 25 秒就掐断重试；同时把 Fabric / Quilt 的加载器 jar 换成国内镜像，以前直连官方 maven 只有约 1KB/s，一个整合包光加载器就要等十几分钟。另外，整合包声明的加载器版本不再被忽略、PCL 勾了「打包启动器」的包能认了、CurseForge 整合包的配置不再写进游戏根目录、每个文件按索引里的 sha1 校验，中文包名也不会再显示成「PCL_」。',
     groups: [
       {
-        icon: 'i-palette',
-        title: '新增 · 下载页皮肤不再只认正版',
+        icon: 'i-download',
+        title: '修复 · 整合包下载卡在某个文件上不动',
         items: [
-          '**三种来源**：皮肤分类顶部可切「皮肤站 / 正版档案 / 本地文件」，默认打开皮肤站 —— 离线账户也能直接换皮肤，不再被「正版里查不到这个名字」挡在门外',
-          '**皮肤站**：接 LittleSkin 公开皮肤库，搜作品名或作者名（中文也能搜），可切最新 / 热门，往下滚到底自动加载下一页；每张卡片直接显示穿在身上的效果、作者和点赞数',
-          '**本地文件**：把 PNG 拖进虚线框、点「选择文件…」、或粘贴图片直链都行；128×128 / 256×256 的 HD 皮肤按最近邻缩到 64（不会糊），64×32 的老皮肤也认，尺寸不合规直接拒收',
-          '**修复导入不显示**：账户设置 → 皮肤库里导入与账户正在用皮肤同内容的图片时，以前会提示「已导入」但列表里永远不出现（去重误把账户私有副本当库条目）—— 现在正常入库并立刻显示',
-          '**套用即生效**：预览卡上的模型标签可点，随时在经典（Steve）和苗条（Alex）之间切；「存库」收进皮肤库，「套用」直接给当前账户 —— 离线账户启动时会注入本地皮肤服务器，游戏里真能看到'
+          '**症状**：装到某个文件就再也不动 —— 磁盘上临时文件的字节数已经和索引写的大小完全一样，等十几分钟零增长、也不报错，只能强杀。原因是服务端把数据发完了却不关连接，启动器一直在等「传输结束」的信号',
+          '**本段收满就走**：分段下载现在按「这一段应有的字节数」判断，收满立刻跳出读循环，不再等服务端 close / FIN',
+          '**真停滞会自己断**：每段 25 秒收不到任何字节就掐断这条连接，带 Range 从断点续传重试；连续两次停滞就交给单流兜底 —— 不会再出现「永远停在 5/80」',
+          '这个函数还负责客户端 jar、Forge 安装器与 CurseForge 下载，这几条链路一起修好了'
         ]
       },
       {
         icon: 'i-globe',
-        title: '安全 · 按 URL 导入皮肤拦内网地址',
+        title: '修复 · Fabric / Quilt 整合包在国内装不上',
         items: [
-          '**拦回环与内网**：按 URL 导入皮肤现在会拒绝 127.0.0.1、localhost、10.x / 172.16-31 / 192.168.x、169.254.x 等内网与云元数据地址，只放行公网直链 —— 避免「按 URL 导入」被当成探测内网服务的跳板',
-          '**尺寸与大小照旧**：仍是 64×64 / 64×32 的 PNG 才收、超过 2MB 拒收，这一层没有放宽'
+          '**加载器 jar 换镜像**：Fabric / Quilt 的加载器本体，以及 sponge-mixin、asm 这批依赖，以前写死官方 maven —— 境内实测只有约 1KB/s，34KB 要等 40 秒；现在自动走 BMCLAPI 镜像，同一批 jar 4 秒下完',
+          '**换源也生效**：设置里把下载源切到 BMCLAPI 时，加载器 maven 也一起换（以前只换 Mojang 那几个域名，切了源也照样卡）',
+          '镜像拿到的文件一样按 sha1 校验，内容不对不会落盘'
         ]
       },
       {
-        icon: 'i-lock',
-        title: '安全 · 皮肤库改名补路径校验',
+        icon: 'i-package',
+        title: '修复 · 整合包装出来跟包里写的不一样',
         items: [
-          '**先查文件名合法性**：改名现在和删除 / 套用一样，先拒掉带 `../` 的越界文件名，改不到皮肤库外面的文件',
-          '**渲染层被污染也安全**：即使界面被注入、传进越界文件名，主进程这一层也会拦下'
+          '**加载器版本不再被忽略**：包里声明 fabric-loader 0.19.5，以前装出来是 0.20.1（mod 按旧版编译的会直接崩，而且整合包安装不经过版本下拉，用户没法补救）；现在按包内版本装，只有上游确实下架了才退回最新并明确提示',
+          '**「打包启动器」的包能认了**：PCL 导出时勾了这一项，外层 zip 里只套着一个 modpack.mrpack；以前三个索引探测全落空、直接报「无法识别的整合包格式」，现在先取出内层再按整合包安装',
+          '**CurseForge 整合包的配置不再撒在游戏根目录**：overrides 改到实例自己的目录，两个整合包不会互相覆盖，实例也会被正确判为「版本隔离」；重名实例同样有友好提示',
+          '**每个文件按索引 sha1 校验**：索引里本来就写着 hashes.sha1，以前这条链全程不比对，坏 jar 会静默落盘、等到启动崩溃才发现；现在不符就删掉重下，日志里写清是哪个文件'
         ]
       },
       {
-        icon: 'i-tools',
-        title: '改进 · 测试口径与功能下架对齐',
+        icon: 'i-user',
+        title: '改进 · 中文包名与进度看得懂了',
         items: [
-          '「下载游戏」默认下架后，版本列表整体不渲染，其「置顶区」测试改判为跳过 —— 不再把「本来就没有列表」误报成产品缺陷',
-          '皮肤库测试新增两条：改名拒绝越界文件名、URL 导入拒绝内网地址，钉住上面两处收口'
+          '**中文包名不再变成下划线**：目录名仍用 ASCII（避免编码问题），但界面显示包里原本的名字 —— 「PCL导出包测试」不再显示成「PCL_」，实例页、版本下拉、主页版本按钮统一',
+          '**进度不再把资源包算成 MOD**：文案从「整合包文件 5/80」变成「5/80（mod 65 · 资源包 13 · 光影 2）」，装完的提示也只报真正的 MOD 数'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '修复 · 导入整合包时右下角浮窗不出进度',
+        items: [
+          '**症状**：点「导入整合包」后右下角那个浮窗要么一直停在 100%「安装完成」不动，要么干脆不出现 —— 其实文件还在往磁盘里写，只是界面看不到；换成 GB 级的包，那段时间能有好几分钟',
+          '**根因有两处**：一是还原包内文件时把整包一次性同步解压，主进程被占住，进度事件全堵在队列里发不出去；二是进度分三段各自从 0 走到 100%（装游戏本体 / 下包内文件 / 还原文件），后一段一开始就掉回个位数，看着像卡死又复活',
+          '**改成一条不回头的整体进度**：读包 0~6% → 装游戏本体与加载器 6~70% → 还原包内文件 70~99% → 100%，百分比只许前进；还原阶段逐个文件读、每个之间让出主线程，浮窗跟着动',
+          '**每个阶段都有话说**：读盘显示「读取 xxx.mrpack（128.0 MB / 460.0 MB）」，还原显示「还原包内文件 128/800」，包内文件按字节推进 —— 一个 200MB 的大 mod 也不会卡在同一个数字上',
+          '**浮窗标题与完成文案跟着任务走**：导入显示「导入整合包 / ✓ 导入完成」，下载页装整合包显示「安装整合包」，普通下载仍是「下载任务 / ✓ 下载完成」'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '修复 · 浮窗不关，还会把下一次下载标成「导入失败」',
+        items: [
+          '**症状**：整合包导入完成后，右下角浮窗偶尔一直挂着不消失；这时候去下载游戏、中途点「停止安装」，浮窗却说「已取消导入」甚至「✗ 导入失败」—— 看着像整合包导入坏了，其实两件事没关系',
+          '**根因**：负责收尾的「完成」标记被一条迟到的进度事件清掉、顺手把浮窗重新建了一个 —— 新建的这个再没有人负责结束，于是永远留在屏幕上；它身上还带着上一次任务的「导入」标签，下一次下载就直接沿用了这个标签',
+          '**收尾后不再接受迟到的进度**：已经结束的任务，后面再来进度事件一律忽略；每个任务在开始时（下载游戏 / 装整合包 / 导入 / 自定义下载）显式开新任务，标题、类型、百分比全部归零 —— 停止下载只会说「已取消下载」',
+          '**兜底自愈**：浮窗走到 100% 之后 8 秒还没收到结束信号，就自己收掉，不会再出现「关不掉的窗」',
+          '**结束态的浮窗点一下立刻收掉**，不用等 4 秒淡出'
+        ]
+      },
+      {
+        icon: 'i-zap',
+        title: '移除 · 极速模式与左下角的小圆圈',
+        items: [
+          '**极速模式整块去掉了**：以前按住左下角小圆圈满 10 秒可以切换的「极速模式」（按住时圆圈转出进度环、字母从 L 变 S、圆圈变琥珀色，界面动画与过渡全部压到瞬间完成）不再提供，相关配置项一并移除 —— 动画与过渡保持正常速度，界面看起来和以前没开极速模式时一样',
+          '**左下角那个小圆圈也删了**：侧栏底部那个跟着账户首字母变化的圆形字母（长按切极速的入口就藏在它身上）整块移除，侧栏现在只剩顶部的启动器图标与一排导航按钮；账户的查看与切换仍在左侧「账户」页',
+          '**老配置不受影响**：以前开过极速模式的机器上，配置里还留着那条旧字段，现在读取时直接忽略 —— 启动器不会因此报错，也不会再悄悄把界面切成省电形态'
         ]
       }
     ]
@@ -11673,7 +12071,7 @@ const CONFIG_SAVE_WHITELIST = new Set([
   /* 照 PCL 补齐的设置项（在「设置 → 启动 / 下载」里改）：
      全局启动选项 + 游戏参数 + 启动前命令 + 限速 + 启动器可见性 + 显卡偏好 */
   'gameArgs', 'preLaunchCmd', 'winTitle', 'winSize', 'forceIsolate',
-  'procPriority', 'launcherVisibility', 'gpuPref', 'speedLimit', 'turboMode',
+  'procPriority', 'launcherVisibility', 'gpuPref', 'speedLimit',
   'translatorBing',
   /* 内置插件「存档备份」的设置（自动开关 / 时机 / 目录 / 保留份数） */
   'backup'

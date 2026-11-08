@@ -11,6 +11,17 @@ const el = (tag, cls, html) => {
   return d;
 };
 const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+/* 实例的「显示名」：整合包导入时包名里的中文记在版本 json 的 xlcTitle（主进程 setInstanceTitle），
+   目录名 / 版本 id 仍是 ASCII。界面统一走这里 —— 否则「PCL导出包测试」会显示成「PCL_」（审计 P3-2）。
+   传 id 字符串也行，会去 S.installed 里找。 */
+function instName(v) {
+  if (!v) return '';
+  if (typeof v === 'string') {
+    const hit = (S.installed || []).find(x => x.id === v);
+    return (hit && hit.title) ? hit.title : v;
+  }
+  return v.title || v.id || '';
+}
 
 /* ---------------- 功能开关（原「临时下架」，只禁不删） ----------------
  * 由设置项 features.downloadGame / features.modpack 控制，默认关闭（= 下架）。
@@ -305,7 +316,7 @@ function gotoPage(name) {
   if (name === 'diag') {
     const di = $('#diagInstance');
     const prev = di.value;
-    di.innerHTML = S.installed.map(v => '<option value="' + esc(v.id) + '">' + esc(v.id) + '</option>').join('') +
+    di.innerHTML = S.installed.map(v => '<option value="' + esc(v.id) + '">' + esc(instName(v)) + '</option>').join('') +
       '<option value="">（全局 .minecraft）</option>';
     if (prev && S.installed.some(v => v.id === prev)) di.value = prev;
     loadDiagReports();
@@ -639,64 +650,6 @@ window.lmc.on('launch:exit', (d) => {
 });
 
 /* ---------------- 配置 ---------------- */
-/* ---------------- 极速模式（1.2-snapshot2） ----------------
- * 开关 = 左下角的小圆圈（#avatar）长按 10 秒。开启后：body.turbo（CSS 把动画/过渡/昂贵特效压到瞬间）、
- * 弹窗退场不等 180ms、主进程收缩 Mod 搜索缓存。默认关闭，配置存在 lmc.config.json 的 turboMode。 */
-let TURBO_ON = false;
-function applyTurbo(on) {
-  TURBO_ON = !!on;
-  document.body.classList.toggle('turbo', TURBO_ON);
-  MODAL_EXIT_MS = (TURBO_ON || REDUCED_MOTION) ? 0 : 180;
-  setAvatarLetter();
-}
-function setAvatarLetter() {
-  const av = $('#avatar');
-  if (!av) return;
-  av.classList.toggle('turbo-on', TURBO_ON);
-  /* 字母固定：L = Launcher 正常模式，S = Speed 极速模式（不跟账户首字母走，用户 2026-10-18 定） */
-  if (TURBO_ON) { av.textContent = 'S'; av.title = '极速模式已开启（长按 10 秒切回正常模式）'; return; }
-  av.textContent = 'L';
-  av.title = '长按 10 秒开启极速模式';
-}
-(function initTurboToggle() {
-  const av = $('#avatar');
-  if (!av) return;
-  const HOLD_MS = 10000;
-  let t0 = 0, raf = 0, fired = false;
-  function stopRing() { if (raf) cancelAnimationFrame(raf); raf = 0; av.style.removeProperty('background'); }
-  function tick() {
-    const left = HOLD_MS - (Date.now() - t0);
-    const p = Math.min(100, (Date.now() - t0) / HOLD_MS * 100);
-    av.style.background = 'conic-gradient(var(--acc2) ' + p.toFixed(1) + '%, rgba(128,128,128,.3) 0)';
-    av.title = '松开取消 · ' + (TURBO_ON ? '关闭' : '开启') + '极速模式（还差 ' + Math.ceil(left / 1000) + ' 秒）';
-    if (p >= 100) { fired = true; stopRing(); doToggle(); return; }
-    raf = requestAnimationFrame(tick);
-  }
-  function cancel() {
-    if (!raf) return;
-    const held = Date.now() - t0;
-    stopRing();
-    setAvatarLetter();
-    if (!fired && held > 1200) toast('按住满 10 秒才会切换极速模式（刚按了 ' + Math.round(held / 1000) + ' 秒）', 'warn');
-  }
-  async function doToggle() {
-    try {
-      S.config = await window.lmc.saveConfig({ turboMode: !TURBO_ON });
-      applyTurbo(!!(S.config && S.config.turboMode));
-      toast(TURBO_ON ? '极速模式已开启：动画与特效已压到最低' : '极速模式已关闭', TURBO_ON ? 'ok' : 'info');
-    } catch (e) {
-      toast('切换极速模式失败：' + ((e && e.message) || e), 'error');
-    }
-  }
-  av.addEventListener('pointerdown', (e) => {
-    if (e.button) return;
-    fired = false; t0 = Date.now();
-    try { av.setPointerCapture(e.pointerId); } catch (_) {}
-    raf = requestAnimationFrame(tick);
-  });
-  av.addEventListener('pointerup', cancel);
-  av.addEventListener('pointercancel', cancel);
-})();
 async function loadConfigUI() {
   S.config = await window.lmc.getConfig();
   /* 启动器重启 / Ctrl+R 后游戏可能还在跑（主进程启动锁还握着）：按钮直接恢复成「关闭游戏」，
@@ -707,8 +660,6 @@ async function loadConfigUI() {
   }
   /* 窗口标题 / 侧栏 logo 提示跟着主进程版本号走（index.html 里写的是静态兜底值）——
      发版只改 main.js 的 APP_VERSION，这里自动同步，不会出现标题停在旧版本的情况。 */
-  /* 极速模式（1.2-snapshot2）：配置到位后立即应用，重启后保持上次的选择 */
-  applyTurbo(!!(S.config && S.config.turboMode));
   if (S.config && S.config.appVersion) {
     const t = 'Xero Lite Craft Launcher ' + S.config.appVersion;
     if (document.title !== t) document.title = t;
@@ -820,13 +771,13 @@ function refreshHome() {
     sel.innerHTML = '<option value="">尚未安装版本 · 去「下载」页安装</option>';
   } else {
     S.installed.forEach(v => {
-      const o = el('option', '', v.id + (v.loader !== 'Vanilla' ? '  (' + v.loader + ')' : ''));
+      const o = el('option', '', instName(v) + (v.loader !== 'Vanilla' ? '  (' + v.loader + ')' : ''));
       o.value = v.id;
       sel.appendChild(o);
     });
   }
   const cur = sel.value;
-  $('#heroVer').textContent = cur || '未安装';
+  $('#heroVer').textContent = cur ? instName(cur) : '未安装';
   renderVsel();
   // 存档下拉：当前实例有版本隔离存档 → 显示实例存档；否则显示全局存档（两者都显示时标注归属）
   rebuildWorldOptions();
@@ -852,7 +803,7 @@ function rebuildWorldOptions() {
 /* 选中版本统一入口：persist=true 时写入配置，重启后自动恢复上次选择 */
 function selectVersion(id, persist) {
   $('#selVersion').value = id;
-  $('#heroVer').textContent = id || '未安装';
+  $('#heroVer').textContent = id ? instName(id) : '未安装';
   renderVsel();
   rebuildWorldOptions();
   renderWorlds();
@@ -868,7 +819,7 @@ function renderVsel() {
   const cur = sel.value;
   const curV = S.installed.find(v => v.id === cur);
   $('#vselBtn').innerHTML =
-    '<span class="cv-name">' + (cur ? esc(cur + (curV && curV.loader !== 'Vanilla' ? ' (' + curV.loader + ')' : '')) : '尚未安装版本 · 去「下载」页安装') + '</span>' +
+    '<span class="cv-name">' + (cur ? esc(instName(cur) + (curV && curV.loader !== 'Vanilla' ? ' (' + curV.loader + ')' : '')) : '尚未安装版本 · 去「下载」页安装') + '</span>' +
     '<svg class="ic sm cv-chev"><use href="#i-chev-d"/></svg>';
   const panel = $('#vselPanel');
   panel.innerHTML = '';
@@ -881,7 +832,7 @@ function renderVsel() {
     row.title = '点击切换到该版本；悬浮显示 设置 / 删除 按钮';
     row.innerHTML =
       blockIconHtml(blockTypeForInstalled(v)) +
-      '<span class="vr-name">' + esc(v.id) + (v.loader !== 'Vanilla' ? '<i class="vr-loader">' + esc(v.loader) + '</i>' : '') + '</span>' +
+      '<span class="vr-name">' + esc(instName(v)) + (v.loader !== 'Vanilla' ? '<i class="vr-loader">' + esc(v.loader) + '</i>' : '') + '</span>' +
       '<span class="vr-act">' +
       '<button type="button" class="vsel-ico" title="实例设置（基础参数 / MOD 管理）"><svg class="ic sm"><use href="#i-settings"/></svg></button>' +
       '<button type="button" class="vsel-ico vr-del" title="删除实例"><svg class="ic sm"><use href="#i-trash"/></svg></button>' +
@@ -939,7 +890,6 @@ $('#selVersion').addEventListener('change', () => {
 $('#inpName').addEventListener('input', () => {
   const v = $('#inpName').value.trim();
   $('#heroName').textContent = v || 'Steve';
-  setAvatarLetter();
   $('#setUsername').value = $('#inpName').value;
   heroHeadFor(v);
 });
@@ -947,7 +897,6 @@ $('#inpName').addEventListener('input', () => {
 $('#setUsername').addEventListener('input', () => {
   const v = $('#setUsername').value.trim();
   $('#heroName').textContent = v || 'Steve';
-  setAvatarLetter();
   $('#inpName').value = $('#setUsername').value;
   heroHeadFor(v);
 });
@@ -1100,7 +1049,7 @@ function refreshAuxSelects() {
   const withLoader = S.installed.filter(v => v.loader && v.loader !== 'Vanilla');
   const rest = S.installed.filter(v => !withLoader.includes(v));
   const opts = (list) => list.map(v => '<option value="' + esc(v.id) + '">' +
-    esc(v.id) + (v.loader !== 'Vanilla' ? ' (' + esc(v.loader) + ')' : '') + '</option>').join('');
+    esc(instName(v)) + (v.loader !== 'Vanilla' ? ' (' + esc(v.loader) + ')' : '') + '</option>').join('');
   /* 目标版本：首项固定为「全部」（不筛 MC 版本与加载器，全站资源都能看到）
    * 搜索浏览不需要先装版本；但**安装 MOD 必须选具体版本**（MOD 要进该版本的 mods 目录才生效），
    * 停在「全部」时点安装会被引导去选版本 */
@@ -1760,7 +1709,7 @@ const GO_IDLE_HTML = '<svg class="ic sm"><use href="#i-download"/></svg> 开始�
 let modalClosing = false, modalCloseToken = 0;
 /* 系统开了「减少动态效果」时，退场动画时长压到 0（不能让用户白等 180ms 才看到窗口消失） */
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-let MODAL_EXIT_MS = REDUCED_MOTION ? 0 : 180;   /* 极速模式开启时也会压成 0（见 applyTurbo） */
+let MODAL_EXIT_MS = REDUCED_MOTION ? 0 : 180;
 function openModal(maskClose) {
   modalCloseToken++;                                  /* 作废上一次没播完的关闭定时器 */
   modalClosing = false;
@@ -2083,6 +2032,7 @@ function markInstallingFoot() {
 }
 async function startInstall() {
   if (installingNow) { closeToBackground(); return; }   /* 下载中再点这个位置 = 转入后台 */
+  dlTaskBegin();   /* 新任务：清掉上一次的浮窗状态，别让「导入整合包」的标题漂到这次下载上 */
   installingNow = true;
   markInstallingFoot();
   $('#mprog').style.display = 'block';
@@ -2122,7 +2072,7 @@ function resetModalFoot() {
 /* ---------------- 下载任务浮窗（PCL 式）：下载期间常驻右下角，点开可看进度/阶段/实时速度/预计剩余 ----------------
    速度与剩余时间不再从「进度百分比跳变」硬算（那会让大文件下载期间数字冻结在「预计剩余 1 秒」），
    而是读主进程 install:speed 推来的真实字节速率 + 当前阶段总字节。 */
-const dlTask = { shown: false, exp: false, wrap: null, sum: null, bar: null, txt: null, p: 0, text: '', eta: '', bps: 0, bytes: 0, bytesTotal: 0, done: false };
+const dlTask = { shown: false, exp: false, wrap: null, sum: null, bar: null, txt: null, p: 0, text: '', eta: '', bps: 0, bytes: 0, bytesTotal: 0, done: false, title: '', kind: '', gen: 0, active: false, autoTimer: 0 };
 function fmtSpeed(bps) {
   if (!(bps > 0)) return '';
   if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
@@ -2151,13 +2101,14 @@ function dlTaskBuild() {
   w.innerHTML =
     '<div class="dl-head">' +
     '<svg class="ic sm" style="color:#3ddc84;flex:none"><use href="#i-download"/></svg>' +
-    '<b class="dl-title">下载任务</b>' +
+    '<b class="dl-title" id="dlPillTitle">下载任务</b>' +
     '<span class="dl-sum" id="dlPillSum"></span>' +
     '<span class="dl-chev" id="dlPillChev">详情 ▾</span></div>' +
     '<div class="dl-detail" id="dlPillDetail"><div>' +
     '<div class="prog" style="height:6px"><i id="dlPillBar" style="width:0%"></i></div>' +
     '<div class="dl-txt" id="dlPillTxt"></div></div></div>';
   w.addEventListener('click', () => {
+    if (dlTask.done) { dlTaskReset(); return; }   /* 已经结束的浮窗：点一下立刻收掉，不用等淡出 */
     dlTask.exp = !dlTask.exp;
     w.querySelector('#dlPillChev').textContent = dlTask.exp ? '收起 ▴' : '详情 ▾';
     dlTaskRender();
@@ -2171,41 +2122,101 @@ function dlTaskBuild() {
 }
 function dlTaskRender() {
   if (!dlTask.wrap || dlTask.done) return;
+  const ttl = dlTask.wrap.querySelector('#dlPillTitle');
+  if (ttl) ttl.textContent = dlTask.title || '下载任务';
   dlTask.wrap.classList.toggle('exp', dlTask.exp);   /* 展开/收起交给 CSS 行高过渡，不再 display 硬切 */
   dlTask.bar.style.width = dlTask.p + '%';
   const sp = fmtSpeed(dlTask.bps);
   const eta = dlEtaText();
   dlTask.eta = eta;
   dlTask.sum.textContent = dlTask.p + '%' + (sp ? ' · ↓ ' + sp : '');
+  /* 有速度才提示「各阶段快慢不同」；纯本地阶段（读包 / 还原文件）没速度，挂这句反而像在糊弄 */
   dlTask.txt.textContent = dlTask.text + (sp ? ' · ↓ ' + sp : '') + (eta ? ' · ' + eta : '') +
-    '（进度条按整体安装流程计算，各阶段快慢不同）';
+    (sp || eta ? '（进度条按整体安装流程计算，各阶段快慢不同）' : '');
+}
+/* 把浮窗彻底收掉并清空状态（标题 / 类型 / 百分比 / 结束标记全归零）。
+   gen 在这里进位：旧的淡出、移除、兜底定时器一律作废，别让它把新浮窗删了。 */
+function dlTaskReset() {
+  dlTask.gen = (dlTask.gen || 0) + 1;
+  if (dlTask.autoTimer) { clearTimeout(dlTask.autoTimer); dlTask.autoTimer = 0; }
+  if (dlTask.wrap) dlTask.wrap.remove();
+  dlTask.wrap = null; dlTask.sum = null; dlTask.bar = null; dlTask.txt = null;
+  dlTask.shown = false; dlTask.done = false; dlTask.exp = false; dlTask.active = false;
+  dlTask.p = 0; dlTask.eta = ''; dlTask.bps = 0; dlTask.bytes = 0; dlTask.bytesTotal = 0;
+  dlTask.title = ''; dlTask.kind = '';
+}
+/* 任务入口显式「开一个新任务」：把上一次的残留（尤其是 kind='import'）清干净。
+   为什么必须有它：以前只靠 dlTaskShow 在 done 时自救，收尾之后来一条迟到进度，
+   浮窗就被重新建出来且再没人结束它；那个 kind 还会漂到下一次下载上 ——
+   停止游戏下载却显示「已取消导入」，用户以为整合包导入失败。
+   已有任务在跑时不动它（同一时刻只允许一个任务，按钮侧已经互斥）。 */
+function dlTaskBegin() {
+  if (dlTask.active) return;
+  dlTaskReset();
 }
 function dlTaskShow(d) {
-  if (dlTask.done) return;   /* 任务已结束：别让尾随的进度事件把「完成」文案覆盖回去 */
-  dlTask.p = d.percent || 0;
-  dlTask.text = d.text || d.stage || '下载中';
+  /* 已收尾的任务：迟到的事件不许把浮窗重新拉起来。
+     新任务一律走 dlTaskBegin（入口就把 done 清掉），不靠这里兜。 */
+  if (dlTask.done) return;
+  dlTask.active = true;
+  /* 标题只认第一个事件的：导入时先来的是「导入整合包」，往里走之后各子阶段会各自带标题
+     （装着装着变成「安装整合包」会让人以为点了两次） */
+  if (d && d.title && !dlTask.title) dlTask.title = d.title;
+  if (d && d.kind && !dlTask.kind) dlTask.kind = d.kind;
   if (!dlTask.shown) {
     dlTaskBuild(); dlTask.shown = true;
-    dlTask.bps = 0; dlTask.bytes = 0; dlTask.bytesTotal = 0;
+    dlTask.p = 0; dlTask.bps = 0; dlTask.bytes = 0; dlTask.bytesTotal = 0;
   }
+  /* 百分比只许前进：导入时「装游戏 100% → 下文件 70%」这种子阶段重启不会再让进度条往回跳 */
+  dlTask.p = Math.max(dlTask.p || 0, Math.min(100, Number(d.percent) || 0));
+  dlTask.text = d.text || d.stage || '下载中';
   dlTaskRender();
+  dlTaskWatch();
 }
-function dlTaskFinish(ok, errMsg, cancelled) {
+/* 兜底自愈：浮窗已经到 100%，8 秒内既没有新进度、也没有 dlTaskFinish（正常收尾事件是紧随其后的），
+   就说明「结束」那条路断了（被异常吞掉 / 走了没接住的路径）。这时自己收掉 ——
+   宁可少显示，也不留一个永远关不掉的窗挡在右下角；任务若还活着，下一条进度会重新建出来。 */
+function dlTaskWatch() {
+  if (dlTask.autoTimer) { clearTimeout(dlTask.autoTimer); dlTask.autoTimer = 0; }
+  if (dlTask.p < 100 || dlTask.done) return;
+  const gen = dlTask.gen;
+  dlTask.autoTimer = setTimeout(() => {
+    dlTask.autoTimer = 0;
+    if (dlTask.gen !== gen || dlTask.done) return;   /* 期间已收尾或换了新任务 */
+    dlTaskReset();
+  }, 8000);
+}
+function dlTaskFinish(ok, errMsg, cancelled, verb) {
   if (!dlTask.shown || dlTask.done) return;
   dlTask.done = true;
+  dlTask.active = false;
+  if (dlTask.autoTimer) { clearTimeout(dlTask.autoTimer); dlTask.autoTimer = 0; }
+  const v = verb || (dlTask.kind === 'import' ? '导入' : dlTask.kind === 'modpack' ? '安装' : '下载');
   dlTask.p = ok ? 100 : dlTask.p;
   dlTask.eta = '';
-  dlTask.text = ok ? '✓ 下载完成' : (cancelled ? '已取消安装' : '✗ 下载失败' + (errMsg ? '：' + errMsg : ''));
-  dlTask.wrap.querySelector('#dlPillSum').textContent = ok ? '100% · 完成' : '失败';
-  dlTask.wrap.querySelector('#dlPillChev').textContent = '';
-  dlTask.bar.style.width = dlTask.p + '%';
-  dlTask.bar.style.background = ok ? '#3ddc84' : '#ff5c5c';
-  dlTask.txt.textContent = dlTask.text;
-  /* 结束：先淡出下滑（.out），再真正移除 —— 以前是「啪」地凭空消失 */
-  setTimeout(() => { if (dlTask.wrap) dlTask.wrap.classList.add('out'); }, 3600);
+  if (ok) dlTask.text = '✓ ' + v + '完成';
+  else if (cancelled) dlTask.text = '已取消' + v;
+  else dlTask.text = '✗ ' + v + '失败' + (errMsg ? '：' + errMsg : '');
+  /* 节点取不到也必须继续往下走排定的移除，否则浮窗就永远留在屏幕上 */
+  const w = dlTask.wrap;
+  if (w) {
+    const sumEl = w.querySelector('#dlPillSum'), chev = w.querySelector('#dlPillChev');
+    if (sumEl) sumEl.textContent = ok ? '100% · 完成' : (cancelled ? '已取消' : '失败');
+    if (chev) chev.textContent = '';
+    if (dlTask.bar) { dlTask.bar.style.width = dlTask.p + '%'; dlTask.bar.style.background = ok ? '#3ddc84' : '#ff5c5c'; }
+    if (dlTask.txt) dlTask.txt.textContent = dlTask.text;
+  }
+  /* 结束：先淡出下滑（.out），再真正移除 —— 以前是「啪」地凭空消失。
+     带 gen：这期间要是又开了新任务，旧定时器不许动新浮窗（曾经会把新任务删掉）。 */
+  const gen = (dlTask.gen = (dlTask.gen || 0) + 1);
+  setTimeout(() => { if (dlTask.gen === gen && dlTask.wrap) dlTask.wrap.classList.add('out'); }, 3600);
   setTimeout(() => {
+    if (dlTask.gen !== gen) return;
     if (dlTask.wrap) dlTask.wrap.remove();
-    dlTask.shown = false; dlTask.done = false; dlTask.bps = 0; dlTask.bytes = 0; dlTask.bytesTotal = 0;
+    dlTask.wrap = null; dlTask.sum = null; dlTask.bar = null; dlTask.txt = null;
+    dlTask.shown = false; dlTask.done = false; dlTask.active = false; dlTask.exp = false;
+    dlTask.bps = 0; dlTask.bytes = 0; dlTask.bytesTotal = 0;
+    dlTask.p = 0; dlTask.title = ''; dlTask.kind = '';
   }, 4000);
 }
 
@@ -2672,6 +2683,7 @@ function armDlStop(btn, jobKey) {
    停止监听器还挂着 —— 这个按钮在本页存活期内就彻底废了。
    run() 抛错时统一折成 { ok:false, error }，调用方的 toast 分支照常走。 */
 async function dlGuarded(btn, jobKey, busyText, doneHtml, run) {
+  dlTaskBegin();   /* 新任务：先把上一次浮窗的标题 / 类型清干净（否则停止下载会显示「已取消导入」） */
   btn.dataset.busy = '1';
   btn.disabled = true; btn.textContent = busyText;
   const disarm = armDlStop(btn, jobKey);
@@ -3285,8 +3297,16 @@ function dispTitle(zh, en) {
 /* 导入整合包按钮的置灰在 applyFeatureOff() 里统一处理（配置一改就重画，不在这里写死一次） */
 $('#btnImportModpack').addEventListener('click', async () => {
   if (FEATURE_OFF.modpack) { toast('该功能暂时下架，敬请期待', 'warn'); return; }
-  const r = await window.lmc.importModpack();
-  dlTaskFinish(!!r.ok, r.error || '');
+  dlTaskBegin();   /* 新任务：清掉上一次留在浮窗上的标题 / 类型 / 百分比 */
+  let r;
+  try {
+    r = await window.lmc.importModpack();
+  } catch (e) {
+    /* 通道抛异常也要有收尾：否则浮窗停在 100% 永远不关（用户以为还在导入） */
+    r = { ok: false, error: (e && e.message) || String(e) };
+  }
+  /* 主进程会把「读包 → 装游戏 → 还原文件」折算成一条整体进度推过来，浮窗标题/结束文案都按「导入」走 */
+  dlTaskFinish(!!r.ok, r.error || '', !!r.canceled, '导入');
   if (r.canceled) return;
   if (!r.ok) { toast('导入失败: ' + r.error, 'error'); return; }
   await scanDir();
@@ -3306,7 +3326,7 @@ function renderInstances() {
     const isDefault = defVer === v.id;
     const row = el('div', 'ver-row',
       blockIconHtml(blockTypeForInstalled(v)) +
-      '<div class="v-name">' + esc(v.id) + (isDefault ? '<span class="badge">默认</span>' : '') + '</div>' +
+      '<div class="v-name"' + (v.title ? ' title="目录名：' + esc(v.id) + '"' : '') + '>' + esc(instName(v)) + (isDefault ? '<span class="badge">默认</span>' : '') + '</div>' +
       '<div class="v-type"><span class="pill release">' + esc(v.loader || 'Vanilla') + '</span></div>' +
       '<div class="v-date">' + (v.mcVersion && v.mcVersion !== v.id ? 'MC ' + esc(v.mcVersion) : '&nbsp;') + '</div>' +
       '<div class="v-act"></div>');
@@ -3336,7 +3356,7 @@ function renderInstances() {
     });
     const del = el('button', 'btn ghost', '删除');
     del.addEventListener('click', async () => {
-      if (!(await askConfirm('确定删除实例「' + v.id + '」？', { danger: true, detail: '此操作不可恢复。' }))) return;
+      if (!(await askConfirm('确定删除实例「' + instName(v) + (v.title ? '（目录 ' + v.id + '）' : '') + '」？', { danger: true, detail: '此操作不可恢复。' }))) return;
       const r = await window.lmc.instanceDelete({ id: v.id });
       if (!r.ok) { toast('删除失败: ' + r.error, 'error'); return; }
       await scanDir(); renderInstances();
@@ -4248,6 +4268,7 @@ function openCustomDlModal() {
     $('#cdGo').disabled = true; $('#cdCancel').disabled = true;
     $('#mprog').style.display = 'block';
     $('#mpText').textContent = '下载中（多线程）…';
+    dlTaskBegin();   /* 新任务：上一次浮窗的标题 / 类型不许留到这次下载 */
     const r = await window.lmc.customDownload({
       url,
       target: $('#cdTarget').value,
@@ -4932,7 +4953,6 @@ function syncAccountUI(activeName) {
   if (activeName) {
     $('#inpName').value = activeName;
     $('#heroName').textContent = activeName;
-    setAvatarLetter();
     $('#setUsername').value = activeName;
     heroHeadFor(activeName);
   }
@@ -5021,7 +5041,6 @@ async function loadHeroHead() {
     if (r && r.ok) {
       S.accounts = r.accounts || [];
       heroHeadFor(r.active);
-      setAvatarLetter();   /* 侧栏左下角小圆的字母：L=正常 / S=极速，不跟随账户首字母 */
       return;
     }
   } catch (_) {}

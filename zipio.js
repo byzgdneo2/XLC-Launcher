@@ -78,6 +78,41 @@ function findZipEntries(zipBuf, filterFn) {
   }
   return out;
 }
+/* 只解析中央目录，不解压：返回 [{name, method, size, offset}]。
+   为什么要单独有它：还原大整合包（几百 MB / 几千个文件）时不能一次 findZipEntries(buf, () => true)，
+   那会在主进程里同步解压整包 —— 界面上的进度事件全被堵住，浮窗永远停在一个数上。
+   先建索引，再按条目逐个读（readZipEntry），中间能 await 让出事件循环。 */
+function listZipEntries(zipBuf) {
+  let eocd = -1;
+  for (let i = zipBuf.length - 22; i >= Math.max(0, zipBuf.length - 65558); i--) {
+    if (zipBuf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('无效的 ZIP 文件');
+  const count = zipBuf.readUInt16LE(eocd + 10);
+  let pos = zipBuf.readUInt32LE(eocd + 16);
+  const out = [];
+  for (let n = 0; n < count; n++) {
+    if (zipBuf.readUInt32LE(pos) !== 0x02014b50) break;
+    const method = zipBuf.readUInt16LE(pos + 10);
+    const cSize = zipBuf.readUInt32LE(pos + 20);
+    const nameLen = zipBuf.readUInt16LE(pos + 28);
+    const extraLen = zipBuf.readUInt16LE(pos + 30);
+    const cmtLen = zipBuf.readUInt16LE(pos + 32);
+    const lho = zipBuf.readUInt32LE(pos + 42);
+    const name = zipBuf.slice(pos + 46, pos + 46 + nameLen).toString('utf8');
+    pos += 46 + nameLen + extraLen + cmtLen;
+    if (name.endsWith('/')) continue;
+    const lNameLen = zipBuf.readUInt16LE(lho + 26);
+    const lExtraLen = zipBuf.readUInt16LE(lho + 28);
+    out.push({ name, method, size: cSize, offset: lho + 30 + lNameLen + lExtraLen });
+  }
+  return out;
+}
+/* 按索引取单个条目的数据（只解压这一个） */
+function readZipEntry(zipBuf, ent) {
+  const data = zipBuf.slice(ent.offset, ent.offset + ent.size);
+  return ent.method === 0 ? Buffer.from(data) : zlib.inflateRawSync(data);
+}
 function zipReadEntry(zipBuf, name) {
   const hit = findZipEntries(zipBuf, n => n === name);
   if (!hit.length) throw new Error('包内缺少 ' + name);
@@ -122,4 +157,4 @@ function extractZipPrefix(zipBuf, outDir, prefix) {
   }
   return n;
 }
-module.exports = { crc32, buildZip, findZipEntries, zipReadEntry, extractZipPrefix, listZipNames };
+module.exports = { crc32, buildZip, findZipEntries, listZipEntries, readZipEntry, zipReadEntry, extractZipPrefix, listZipNames };
