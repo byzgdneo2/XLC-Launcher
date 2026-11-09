@@ -5099,21 +5099,35 @@ const SKIN_POSES = [
   { k: 'idle', t: '默认' }
 ];
 const SKIN_IMG_CACHE = new Map();
+/* 缓存上限（审计 L4）：key 是 data URL，换一次皮肤就多一条；不设上限会随使用一直涨。
+   32 条足够覆盖「当前皮肤 + 头像 + 库缩略图」的常用集合。 */
+const SKIN_IMG_CACHE_MAX = 32;
 /* 同一张皮肤被反复要求绘制（滑动帧 / 多个缩略图）时只解码一次 */
 function skinImage(dataUrl, cb) {
   const key = dataUrl || '__default__';
   const hit = SKIN_IMG_CACHE.get(key);
   if (hit && hit.ok) { cb(hit.img); return; }
+  /* 失败态也留在缓存里：paintSkinRig 由 rAF 每帧调用，以前 onerror 里 delete(key)，
+     于是一张坏图（上传中断留下的半截 PNG）会让账户页每秒重试 60 次解码（审计 L4） */
+  if (hit && hit.failed) { cb(null); return; }
   if (hit && hit.pending) { hit.cbs.push(cb); return; }
-  const rec = { ok: false, pending: true, cbs: [cb], img: new Image() };
+  if (SKIN_IMG_CACHE.size >= SKIN_IMG_CACHE_MAX) {
+    /* 按插入顺序淘汰最老的一条；正在解码的不动（它的回调还挂着） */
+    for (const k of SKIN_IMG_CACHE.keys()) {
+      const old = SKIN_IMG_CACHE.get(k);
+      if (old && old.pending) continue;
+      SKIN_IMG_CACHE.delete(k);
+      break;
+    }
+  }
+  const rec = { ok: false, failed: false, pending: true, cbs: [cb], img: new Image() };
   SKIN_IMG_CACHE.set(key, rec);
   rec.img.onload = () => {
     rec.ok = true; rec.pending = false;
     rec.cbs.splice(0).forEach(f => { try { f(rec.img); } catch (_) {} });
   };
   rec.img.onerror = () => {
-    rec.pending = false;
-    SKIN_IMG_CACHE.delete(key);
+    rec.pending = false; rec.failed = true;
     rec.cbs.splice(0).forEach(f => { try { f(null); } catch (_) {} });
   };
   rec.img.src = key === '__default__' ? DEFAULT_SKIN_URL : key;

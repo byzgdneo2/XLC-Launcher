@@ -1,6 +1,6 @@
 {
   "name": "xlc-launcher",
-  "productName": "Xero Lite Craft Launcher 1.4-snapshot6",
+  "productName": "Xero Lite Craft Launcher 1.4-pre1",
   "version": "1.8.0",
   "description": "Xero Lite Craft (XLC) - 现代化 Minecraft 启动器",
   "main": "main.js",
@@ -12,7 +12,7 @@
   },
   "build": {
     "appId": "com.xlc.launcher",
-    "productName": "Xero Lite Craft Launcher 1.4-snapshot6",
+    "productName": "Xero Lite Craft Launcher 1.4-pre1",
     "directories": {
       "output": "dist"
     },
@@ -48,7 +48,7 @@
       ]
     },
     "portable": {
-      "artifactName": "XLC-Launcher-1.4-snapshot6-portable.exe"
+      "artifactName": "XLC-Launcher-1.4-pre1-portable.exe"
     }
   },
   "devDependencies": {
