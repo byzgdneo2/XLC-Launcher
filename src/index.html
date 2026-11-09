@@ -1057,11 +1057,16 @@
           <div class="ver-list" id="accList"><div class="empty-sm">还没有账户，先在上面添加一个</div></div>
         </div>
         <div class="card set-card">
-          <h3><svg class="ic sm"><use href="#i-user-check"/></svg> 当前账户皮肤预览</h3>
-          <div style="display:flex;gap:28px;align-items:center;flex-wrap:wrap">
-            <canvas id="skinPreview" width="160" height="320" style="image-rendering:pixelated;border-radius:8px;background:rgba(127,127,127,.12)"></canvas>
-            <div class="mut" style="max-width:440px;font-size:13px;line-height:1.8">
+          <h3><svg class="ic sm"><use href="#i-user-check"/></svg> 当前账户皮肤预览 <span id="skinPrevWho" class="mut" style="font-weight:400;font-size:12px"></span></h3>
+          <div class="skin-play">
+            <div class="skin-play-stage">
+              <div class="acc-rig-wrap"><canvas id="skinPreview" width="200" height="300"></canvas></div>
+              <div class="pose-row" id="skinPoseRow"></div>
+              <div class="acc-set-cap"><span id="skinPoseName">默认</span><span class="acc-set-tip">· 拖动转视角 · 头跟鼠标</span></div>
+            </div>
+            <div class="mut skin-play-text">
               皮肤文件要求：<b>64x64</b>（新版）或 <b>64x32</b>（旧版）的 PNG。未上传时使用<b>默认皮肤（史蒂夫）</b>。<br/>
+              点账户列表里的任意一行，就会把那个账户的皮肤放到这里看；<b>5 个动作</b>随你切（走路 / 跑步 / 游泳 / 坐下 / 默认）。只要鼠标还在启动器窗口里，那个小人的头就会朝着鼠标转。<br/>
               模型说明：经典（Steve，4px 手臂）/ 苗条（Alex，3px 手臂），需与皮肤文件匹配。<br/>
               皮肤通过内置离线验证服务注入，对<b>单人游戏与局域网/联机房间</b>内的玩家可见（正版皮肤服务器不受影响）。<br/>
               每个账户的皮肤、皮肤模型与玩家名都在它自己那一行的<b>「设置」</b>里改（就在删除按钮左边）。

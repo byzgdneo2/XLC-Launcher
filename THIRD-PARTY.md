@@ -118,6 +118,16 @@ XLC 在若干界面与交互上参考了同类启动器的公开设计与通用�
   `signaturePublickey` 与 RSA-SHA1 签名）依据其公开文档实现。
 - **Minecraft 社区长期通行的做法** —— 本地回环地址上的临时皮肤服务、按内容 sha256
   寻址的纹理缓存等。
+- **星落 LaunCher / StarfallLauncher** · 作者 a9008CE · <https://github.com/a9008CE/StarfallLauncher> —— 仅参考其「账户页皮肤预览」的**功能形态**：把皮肤从正面图案换成可拖动转视角
+  的立体模型、提供几个动作切换、模型头部朝向跟随鼠标。XLC 的相关实现为**独立编写**
+  （JavaScript + Canvas 2D 正交投影，零第三方依赖，见 `src/renderer.js` 的 `rigDraw3D` /
+  `skinPose3D` / `paintSkinRig`），**未使用**其 C# / WPF 源代码、XAML 界面文件、图标、
+  主题或公告资源，也未包含该项目的任何文件。
+
+  该项目采用《星落 LaunCher 分发有限许可》与《星落 LaunCher 存储库合理使用指南》，
+  **不是**标准开源协议。本条按其中「轻度使用」条款给出署名：XLC 仅参考了极小部分的
+  内容（一个功能的形态），且为独立实现；XLC 与本项目**无隶属、赞助或背书关系**，
+  名称、图标与界面均不构成与星落 LaunCher 的混淆，也未暗示其为本作品的官方版本。
 
 ---
 

@@ -28,7 +28,8 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 1.4-snapshot5 | `XLC-Launcher-1.4-snapshot5-portable.exe` | 快照版（最新）：整合包导入实测修复 —— 分段下载不再永久卡死（本段收满即走 + 25 秒空闲超时）、Fabric / Quilt 加载器 jar 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4-snapshot6 | `XLC-Launcher-1.4-snapshot6-portable.exe` | 快照版（最新）：账户页的皮肤预览换成 3D —— 皮肤贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），侧面背面都能看、明暗跟着角度走；鼠标在启动器窗口里移动时头会跟着转（左右 ±46°、上下 ±26°，移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行就换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认）。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4-snapshot5 | `XLC-Launcher-1.4-snapshot5-portable.exe` | 上一快照：整合包导入实测修复 —— 分段下载不再永久卡死（本段收满即走 + 25 秒空闲超时）、Fabric / Quilt 加载器 jar 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot4 | `XLC-Launcher-1.4-snapshot4-portable.exe` | 上一快照：下载页皮肤改成三种来源（皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤）；皮肤库安全收口 —— 按 URL 导入拦内网/回环地址、改名补路径校验。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot3 | `XLC-Launcher-1.4-snapshot3-portable.exe` | 上一快照：下载页新增「皮肤」分类（按正版玩家名抓 Mojang 官方皮肤）、账户设置新增皮肤库与六种动作预览；修复存档区块预览只能画成正方形；更新公告只留当前版本。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot2 | `XLC-Launcher-1.4-snapshot2-portable.exe` | 上一快照：修中文名导致账户列表清空、下载卡 94%、整合包装不进实例、Fabric 实例缺加载器启动报 KnotClient；新增「补全文件」；接管系统代理。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
@@ -53,4 +54,8 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 ## 许可
 
-本项目基于 [MIT License](LICENSE) 开源，第三方组件的许可见 [THIRD-PARTY.md](THIRD-PARTY.md)。
+本项目基于 [MIT License](LICENSE) 开源，第三方组件的许可、以及界面与交互设计的参考来源
+（含 PCL、星落 LaunCher 等）见 [THIRD-PARTY.md](THIRD-PARTY.md)。
+
+设计参考仅限功能形态层面的借鉴，XLC 的相关代码均为独立实现，未复制上述项目的源代码或美术
+资源，也与这些项目没有隶属、赞助或背书关系。

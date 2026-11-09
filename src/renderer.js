@@ -3022,13 +3022,15 @@ function skPreviewCard(box, data) {
       '</div>' +
     '</div>';
   const cv = box.querySelector('.skin-card-rig');
-  paintSkinRig(cv, d.png, 'idle', 0.6, d.model);
+  const drawCard = () => paintSkinRig(cv, d.png, 'idle', 0.6, d.model);
+  drawCard();
+  bindSkinDrag(cv, drawCard);
   const mp = box.querySelector('.sk-model');
   if (mp) mp.addEventListener('click', () => {
     d.model = d.model === 'slim' ? 'classic' : 'slim';
     mp.className = 'pill sk-model ' + (d.model === 'slim' ? 'snapshot' : 'release');
     mp.textContent = d.model === 'slim' ? '苗条 (Alex)' : '经典 (Steve)';
-    paintSkinRig(cv, d.png, 'idle', 0.6, d.model);
+    drawCard();
   });
   const bs = box.querySelector('.sk-save'), bu = box.querySelector('.sk-use');
   if (bs) bs.addEventListener('click', () => skCommit(d, false));
@@ -5046,68 +5048,55 @@ async function loadHeroHead() {
   } catch (_) {}
   renderHeroHead(null);
 }
-/* 皮肤前视图绘制（64x64 / 64x32 均支持，含帽子层）
-   拆成「按画布画」+「按固定 id 画」两层：账户页底部那张预览用 #skinPreview，
-   账户设置弹窗里用自己那块画布 —— 同一套绘制逻辑只写一份，免得两处走形。 */
-function renderSkinPreview(dataUrl) { const cv = $('#skinPreview'); if (cv) paintSkinPreview(cv, dataUrl); }
-function paintSkinPreview(cv, dataUrl) {
-  const ctx = cv.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  const img = new Image();
-  /* 贴图缺失时的兜底：手绘史蒂夫全身（经典 4px 手臂配色） */
-  const paintFallback = () => {
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    const px = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); };
-    const SKIN = '#b5836c', SKIN2 = '#9c6f58', HAIR = '#1f1409', EYEW = '#ffffff', IRIS = '#3b2c8f';
-    const SHIRT = '#00afaf', SHIRT2 = '#00a0a0';     /* 史蒂夫青色上衣 */
-    const PANTS = '#3f3fbf', PANTS2 = '#3535a8';     /* 蓝色裤子 */
-    const SHOE = '#6b6b6b';
-    /* 头（80x80 / 8px 网格） */
-    px(40, 0, 80, 80, SKIN);
-    px(40, 0, 80, 20, HAIR); px(40, 0, 10, 30, HAIR); px(110, 0, 10, 30, HAIR);
-    px(50, 26, 20, 5, '#4b2f1c'); px(90, 26, 20, 5, '#4b2f1c');
-    px(50, 32, 20, 10, EYEW); px(90, 32, 20, 10, EYEW);
-    px(56, 32, 12, 10, IRIS); px(96, 32, 12, 10, IRIS);
-    px(74, 44, 12, 8, SKIN2); px(70, 56, 20, 6, '#6b4535'); px(65, 66, 30, 6, '#2d1c10');
-    /* 躯干 */
-    px(40, 84, 80, 116, SHIRT); px(40, 84, 80, 10, SHIRT2);
-    /* 双臂（经典 4px：前后各一） */
-    px(0, 84, 40, 116, SHIRT); px(0, 190, 40, 10, SKIN); px(120, 84, 40, 116, SHIRT); px(120, 190, 40, 10, SKIN);
-    /* 双腿 */
-    px(40, 204, 40, 116, PANTS); px(80, 204, 40, 116, PANTS);
-    px(40, 310, 40, 10, SHOE); px(80, 310, 40, 10, SHOE);
-    px(40, 204, 40, 8, PANTS2); px(80, 204, 40, 8, PANTS2);
-  };
-  img.onerror = paintFallback;
-  img.onload = () => {
-    const w = img.width, legacy = w === 64 && img.height === 32;
-    const draw = (sx, sy, sw, sh, dx, dy, dw, dh) => ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
-    draw(8, 8, 8, 8, 40, 0, 80, 80);           /* 头 */
-    if (!legacy) draw(40, 8, 8, 8, 40, 0, 80, 80); /* 帽子层（64x32 无独立帽子层时跳过） */
-    draw(20, 20, 8, 12, 40, 80, 80, 120);      /* 身体 */
-    draw(44, 20, 4, 12, 0, 80, 40, 120);       /* 右臂 */
-    if (!legacy) draw(36, 52, 4, 12, 120, 80, 40, 120); /* 左臂 */
-    else draw(44, 20, 4, 12, 120, 80, 40, 120);
-    draw(4, 16, 4, 12, 40, 200, 40, 120);      /* 右腿 */
-    if (!legacy) draw(20, 52, 4, 12, 80, 200, 40, 120); /* 左腿 */
-    else draw(4, 16, 4, 12, 80, 200, 40, 120);
-  };
-  img.src = dataUrl || DEFAULT_SKIN_URL;
+/* ---------------- 账户页的皮肤预览 ----------------
+ * 这块原来在「账户设置」弹窗里：不点进某个账户根本看不到，等于白做。挪到账户页之后，
+ * 点账户列表任意一行就换皮，8 个动作随手切，还能拖动转视角、鼠标在画面上移动时头跟着转。
+ * 状态放 SKIN_PAGE（切账户 / 切动作后动画循环继续用同一个），不用整页重画。 */
+const SKIN_PAGE = { pose: 'idle', model: 'classic', url: null };
+function renderSkinPreview(acc) {
+  const cv = $('#skinPreview');
+  if (!cv) return;
+  const a = acc && typeof acc === 'object' ? acc : null;
+  SKIN_PAGE.url = a ? (a.skinUrl || null) : null;
+  SKIN_PAGE.model = a && a.model === 'slim' ? 'slim' : 'classic';
+  const who = $('#skinPrevWho');
+  if (who) who.textContent = a ? '（' + a.name + (a.skin ? ' · 自定义皮肤' : ' · 默认皮肤') + '）' : '';
+  const row = $('#skinPoseRow');
+  if (row && !row.dataset.bound) {
+    row.dataset.bound = '1';
+    row.innerHTML = SKIN_POSES.map(x => '<button class="pose-btn' + (x.k === SKIN_PAGE.pose ? ' on' : '') + '" data-pose="' + x.k + '">' + x.t + '</button>').join('');
+    /* 事件委托：按钮只建一次，来回切账户不会越绑越多 */
+    row.addEventListener('click', (ev) => {
+      const b = ev.target.closest('.pose-btn');
+      if (!b) return;
+      SKIN_PAGE.pose = b.dataset.pose;
+      $$('#skinPoseRow .pose-btn').forEach(x => x.classList.toggle('on', x === b));
+      const nm = $('#skinPoseName');
+      if (nm) nm.textContent = (SKIN_POSES.find(x => x.k === SKIN_PAGE.pose) || {}).t || '';
+      paintSkinRig(cv, SKIN_PAGE.url, SKIN_PAGE.pose, SKIN_RIG.phase || 0.9, SKIN_PAGE.model, SKIN_LOOK.get(cv));
+    });
+  }
+  if (row) $$('#skinPoseRow .pose-btn').forEach(x => x.classList.toggle('on', x.dataset.pose === SKIN_PAGE.pose));
+  const nm = $('#skinPoseName');
+  if (nm) nm.textContent = (SKIN_POSES.find(x => x.k === SKIN_PAGE.pose) || {}).t || '';
+  bindSkinDrag(cv);
+  bindSkinLook(cv);
+  skinRigStart(cv, () => ({ dataUrl: SKIN_PAGE.url, model: SKIN_PAGE.model, pose: SKIN_PAGE.pose }));
 }
-/* ---------------- 皮肤「动作预览」（账户设置 / 皮肤库共用） ----------------
- * 为什么手写 2D 骨架、不引 3D 模型：皮肤本身就是一张 64×64 贴图，预览区只有 180×270；
- * 把四肢当成贴着关节旋转的矩形、从贴图上取正面的 UV，就足够表达「站立 / 行走 / 奔跑 /
- * 潜行 / 持物 / 穿甲」，零依赖、离线可用，也不用为几 MB 的模型再开一条下载。
- * UV 沿用 paintSkinPreview 那一套：头 8,8 · 帽子 40,8 · 身 20,20 · 右臂 44,20 ·
- * 左臂 36,52 · 右腿 4,20 · 左腿 20,52；第二层（外套/帽子）在 y+16 那一排。 */
+/* ---------------- 皮肤「动作预览」（账户页 / 皮肤库共用） ----------------
+ * 为什么自己画、不引 3D 模型：皮肤本身就是一张 64×64 贴图，预览区只有 200×300；
+ * 把皮肤贴到立方体上、按关节摆动作，就足够表达「走路 / 跑步 / 游泳 / 坐下 / 默认」，
+ * 零依赖、离线可用，也不用为几 MB 的模型再开一条下载。
+ * UV 沿用前视图那一套：头 8,8 · 帽子 40,8 · 身 20,20 · 右臂 44,20 ·
+ * 左臂 36,52 · 右腿 4,20 · 左腿 20,52；第二层（外套/帽子）在 y+16 那一排。
+ * 按钮只留这 5 个（用户指定）；`sneak` / `hold` / `armor` 的绘制分支还在，
+ * 只是不再有入口 —— 以后想放回来加一行就行。 */
 const SKIN_POSES = [
-  { k: 'idle', t: '站立' },
-  { k: 'walk', t: '行走' },
-  { k: 'run', t: '奔跑' },
-  { k: 'sneak', t: '潜行' },
-  { k: 'hold', t: '持物' },
-  { k: 'armor', t: '穿甲' }
+  { k: 'walk', t: '走路' },
+  { k: 'run', t: '跑步' },
+  { k: 'swim', t: '游泳' },
+  { k: 'sit', t: '坐下' },
+  { k: 'idle', t: '默认' }
 ];
 const SKIN_IMG_CACHE = new Map();
 /* 同一张皮肤被反复要求绘制（滑动帧 / 多个缩略图）时只解码一次 */
@@ -5142,7 +5131,7 @@ function drawSkinHead(cv, dataUrl) {
     ctx.drawImage(img, 40, 8, 8, 8, 0, 0, cv.width, cv.height);
   });
 }
-function paintSkinRig(cv, dataUrl, pose, phase, model) {
+function paintSkinRig(cv, dataUrl, pose, phase, model, look) {
   if (!cv) return;
   const ctx = cv.getContext('2d');
   ctx.imageSmoothingEnabled = false;
@@ -5150,7 +5139,13 @@ function paintSkinRig(cv, dataUrl, pose, phase, model) {
   const go = (img) => {
     ctx.clearRect(0, 0, cv.width, cv.height);
     if (!img) return;
-    rigDraw(ctx, cv, img, pose || 'idle', Number(phase) || 0, model === 'slim' ? 'slim' : 'classic');
+    const md = model === 'slim' ? 'slim' : 'classic';
+    /* 64×32 的老皮肤只有正面贴图（没有侧面 / 背面那一圈），3D 会把缺失的部分画成透明，
+       看着像人被削掉一半 —— 这种老格式直接走原来的平面画法。 */
+    const legacy = img.width === 64 && img.height === 32;
+    /* 穿甲那套「铁片贴纸」本来就是按正面画的，套到 3D 上会浮在模型外面，同样走平面画法 */
+    if (legacy || pose === 'armor') rigDrawFlat(ctx, cv, img, pose || 'idle', Number(phase) || 0, md);
+    else rigDraw3D(ctx, cv, img, pose || 'idle', Number(phase) || 0, md, skinViewOf(cv), look);
   };
   skinImage(dataUrl, (img) => {
     if (img) return go(img);
@@ -5199,7 +5194,7 @@ function rigItemCube(ctx, x, y, s) {
   ctx.beginPath(); ctx.moveTo(h, -d + h * 0.55); ctx.lineTo(h, h * 0.55 + s * 0.5); ctx.stroke();
   ctx.restore();
 }
-function rigDraw(ctx, cv, img, pose, phase, model) {
+function rigDrawFlat(ctx, cv, img, pose, phase, model) {
   const W = cv.width, H = cv.height;
   const slim = model === 'slim';
   const armW = slim ? 3 : 4;
@@ -5328,6 +5323,283 @@ function rigDraw(ctx, cv, img, pose, phase, model) {
     ctx.restore();
   }
 }
+/* ---------------- 皮肤预览：正交投影 3D ----------------
+ * 为什么自己算、不引 three.js：模型只有 6 个长方体，正交投影下每个面投出来还是平行四边形，
+ * 用 setTransform 把贴图矩形仿射映射过去就是精确解 —— 不需要 WebGL、不需要矩阵库，
+ * 打包体积一分不涨，离线也能用（这个启动器不为一张预览图再开第二条下载）。
+ * 视角：拖 canvas 转 yaw / pitch（存在 SKIN_VIEW，弹窗重绘不丢），双击复位。
+ * 动作沿用 SKIN_POSES 的 key，另外补了「游泳 / 坐下」两套姿势。 */
+const SKIN_VIEW = new WeakMap();
+const SKIN_VIEW_DEF = { yaw: -22, pitch: 8 };
+function skinViewOf(cv) {
+  let v = SKIN_VIEW.get(cv);
+  if (!v) { v = { yaw: SKIN_VIEW_DEF.yaw, pitch: SKIN_VIEW_DEF.pitch }; SKIN_VIEW.set(cv, v); }
+  return v;
+}
+/* 拖动旋转 + 双击复位。同一个 canvas 只绑一次（弹窗每次重绘都是新节点，用 dataset 记）。
+   draw 传了就用自己的重画函数（下载页那种一次性静态预览没有动画循环）。 */
+const SKIN_DRAW = new WeakMap();
+function bindSkinDrag(cv, draw) {
+  if (!cv || cv.dataset.skinDrag) { if (cv && draw) SKIN_DRAW.set(cv, draw); return; }
+  cv.dataset.skinDrag = '1';
+  cv.classList.add('skin-drag');
+  cv.title = '拖动旋转视角 · 双击复位';
+  if (draw) SKIN_DRAW.set(cv, draw);
+  let sx = 0, sy = 0, y0 = 0, p0 = 0, on = false;
+  const repaint = () => {
+    const fn = SKIN_DRAW.get(cv);
+    if (fn) { fn(); return; }
+    const st = (SKIN_RIG.get && SKIN_RIG.cv === cv) ? SKIN_RIG.get() : null;
+    if (st) paintSkinRig(cv, st.dataUrl, st.pose, SKIN_RIG.phase || 0, st.model, SKIN_LOOK.get(cv));
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    on = true; sx = e.clientX; sy = e.clientY;
+    const v = skinViewOf(cv); y0 = v.yaw; p0 = v.pitch;
+    cv.classList.add('dragging');
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!on) return;
+    const v = skinViewOf(cv);
+    v.yaw = y0 + (e.clientX - sx) * 0.55;
+    /* 上下跟手：往上拖，模型跟着往上翻（露出下巴），往下拖才往下压（看到头顶）。
+       原来这里是 p0 - dy，方向反了 —— 往上拖反而看见人往下沉。 */
+    v.pitch = Math.max(-42, Math.min(62, p0 + (e.clientY - sy) * 0.35));
+    repaint();
+  });
+  const stop = () => { on = false; cv.classList.remove('dragging'); };
+  cv.addEventListener('pointerup', stop);
+  cv.addEventListener('pointercancel', stop);
+  cv.addEventListener('dblclick', () => {
+    const v = skinViewOf(cv);
+    v.yaw = SKIN_VIEW_DEF.yaw; v.pitch = SKIN_VIEW_DEF.pitch;
+    repaint();
+  });
+}
+/* 头追鼠标：指针在画布上的相对位置 → 模型空间里的转头角度（左右 ±46°、上下 ±26°），
+ * 动画循环里做缓动（不是硬切），指针离开画布就慢慢回正。只认画布范围内的指针，
+ * 不然整页动一下鼠标，所有人像都跟着甩头。拖动转视角时暂停跟随，免得边转边扭。 */
+const SKIN_LOOK = new WeakMap();
+/* 头跟鼠标：监听整个窗口，不是只监听画布 —— 鼠标挪到侧栏、版本列表上，
+   头照样朝那个方向转（离画布越远越贴边，到窗口边缘就是最大角度）。
+   监听器只挂一次（画布是账户页里常驻的那一个，来回切页面不会越绑越多）。 */
+let SKIN_LOOK_ON = false;
+function bindSkinLook(cv) {
+  if (!cv) return;
+  if (!SKIN_LOOK.get(cv)) SKIN_LOOK.set(cv, { tx: 0, ty: 0, yaw: 0, pitch: 0 });
+  if (SKIN_LOOK_ON) return;
+  SKIN_LOOK_ON = true;
+  const aim = (e) => {
+    const c = document.getElementById('skinPreview');
+    if (!c) return;
+    if (c.classList.contains('dragging')) return;
+    const st = SKIN_LOOK.get(c);
+    if (!st) return;
+    const r = c.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    /* 以画布中心为原点算相对位置，超出画布就夹到 ±1（所以窗口任意角落都能顶满角度） */
+    const nx = Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width / 2)) / (r.width / 2)));
+    const ny = Math.max(-1, Math.min(1, (e.clientY - (r.top + r.height / 2)) / (r.height / 2)));
+    st.tx = nx * 46;
+    st.ty = ny * 26;                 /* 指针在下方 = 低头，正角在这套旋转里就是往前俯 */
+  };
+  const back = () => {
+    const c = document.getElementById('skinPreview');
+    const st = c && SKIN_LOOK.get(c);
+    if (st) { st.tx = 0; st.ty = 0; }
+  };
+  window.addEventListener('pointermove', aim, { passive: true });
+  /* 指针离开启动器窗口（或窗口失焦）就回正 */
+  document.documentElement.addEventListener('pointerleave', back);
+  document.documentElement.addEventListener('mouseleave', back);
+  window.addEventListener('blur', back);
+}
+/* 绕 X → Y → Z 旋转（角度制）。只服务这一块，够用就行。 */
+function skinRot3(p, ax, ay, az) {
+  let x = p[0], y = p[1], z = p[2];
+  if (ax) { const r = ax * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); const y2 = y * c - z * s; z = y * s + z * c; y = y2; }
+  if (ay) { const r = ay * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); const x2 = x * c + z * s; z = -x * s + z * c; x = x2; }
+  if (az) { const r = az * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); const x2 = x * c - y * s; const y2 = x * s + y * c; x = x2; y = y2; }
+  return [x, y, z];
+}
+/* 六个面：c = 法线方向（用来算面中心），r = 贴图 +u 方向，u = 贴图 +v 的反方向。
+   r × u 就是外法线 —— 背面剔除、明暗都靠它。 */
+const SKIN_FACE = {
+  front:  { c: [0, 0, 1],  r: [1, 0, 0],  u: [0, 1, 0] },
+  back:   { c: [0, 0, -1], r: [-1, 0, 0], u: [0, 1, 0] },
+  right:  { c: [-1, 0, 0], r: [0, 0, 1],  u: [0, 1, 0] },
+  left:   { c: [1, 0, 0],  r: [0, 0, -1], u: [0, 1, 0] },
+  top:    { c: [0, 1, 0],  r: [1, 0, 0],  u: [0, 0, -1] },
+  bottom: { c: [0, -1, 0], r: [1, 0, 0],  u: [0, 0, 1] }
+};
+/* 各部件在 64×64 皮肤里的 UV（right/left 指角色自身的右/左，不是屏幕左右）。
+   ov 是第二层（帽子 / 外套 / 袖子 / 裤腿）：头在 u+32，其余在 v+16。 */
+function skinRigModel(model) {
+  const slim = model === 'slim';
+  const aw = slim ? 3 : 4;
+  const ax = 4 + aw / 2;                        /* 手臂中心离中轴多远 */
+  const sh = (o, du, dv) => {
+    const out = {};
+    for (const k of Object.keys(o)) out[k] = [o[k][0] + du, o[k][1] + dv, o[k][2], o[k][3]];
+    return out;
+  };
+  const armR = slim
+    ? { right: [40, 20, 4, 12], front: [44, 20, 3, 12], left: [47, 20, 4, 12], back: [51, 20, 3, 12], top: [44, 16, 3, 4], bottom: [47, 16, 3, 4] }
+    : { right: [40, 20, 4, 12], front: [44, 20, 4, 12], left: [48, 20, 4, 12], back: [52, 20, 4, 12], top: [44, 16, 4, 4], bottom: [48, 16, 4, 4] };
+  const armL = slim
+    ? { right: [32, 52, 4, 12], front: [36, 52, 3, 12], left: [39, 52, 4, 12], back: [43, 52, 3, 12], top: [36, 48, 3, 4], bottom: [39, 48, 3, 4] }
+    : { right: [32, 52, 4, 12], front: [36, 52, 4, 12], left: [40, 52, 4, 12], back: [44, 52, 4, 12], top: [36, 48, 4, 4], bottom: [40, 48, 4, 4] };
+  const legR = { right: [0, 20, 4, 12], front: [4, 20, 4, 12], left: [8, 20, 4, 12], back: [12, 20, 4, 12], top: [4, 16, 4, 4], bottom: [8, 16, 4, 4] };
+  const legL = { right: [16, 52, 4, 12], front: [20, 52, 4, 12], left: [24, 52, 4, 12], back: [28, 52, 4, 12], top: [20, 48, 4, 4], bottom: [24, 48, 4, 4] };
+  return {
+    head: { size: [8, 8, 8], pivot: [0, 24, 0], off: [0, 4, 0],
+      uv: { front: [8, 8, 8, 8], back: [24, 8, 8, 8], left: [16, 8, 8, 8], right: [0, 8, 8, 8], top: [8, 0, 8, 8], bottom: [16, 0, 8, 8] },
+      ov: { front: [40, 8, 8, 8], back: [56, 8, 8, 8], left: [48, 8, 8, 8], right: [32, 8, 8, 8], top: [40, 0, 8, 8], bottom: [48, 0, 8, 8] } },
+    body: { size: [8, 12, 4], pivot: [0, 24, 0], off: [0, -6, 0],
+      uv: { right: [16, 20, 4, 12], front: [20, 20, 8, 12], left: [28, 20, 4, 12], back: [32, 20, 8, 12], top: [20, 16, 8, 4], bottom: [28, 16, 8, 4] },
+      ov: sh({ right: [16, 20, 4, 12], front: [20, 20, 8, 12], left: [28, 20, 4, 12], back: [32, 20, 8, 12], top: [20, 16, 8, 4], bottom: [28, 16, 8, 4] }, 0, 16) },
+    armR: { size: [aw, 12, 4], pivot: [-ax, 24, 0], off: [0, -6, 0], uv: armR, ov: sh(armR, 0, 16) },
+    armL: { size: [aw, 12, 4], pivot: [ax, 24, 0], off: [0, -6, 0], uv: armL, ov: sh(armL, 0, 16) },
+    legR: { size: [4, 12, 4], pivot: [-2, 12, 0], off: [0, -6, 0], uv: legR, ov: sh(legR, 0, 16) },
+    legL: { size: [4, 12, 4], pivot: [2, 12, 0], off: [0, -6, 0], uv: legL, ov: sh(legL, 0, 16) }
+  };
+}
+/* 每个姿势给各部件一组旋转（度）+ 整个人要不要趴下去（游泳）。
+   约定：四肢挂在轴下方，绕 X 负角 = 往镜头这边摆（正面看就是「往前」）。 */
+function skinPose3D(pose, phase, look) {
+  const s = Math.sin(phase);
+  const P = { head: [0, 0, 0], body: [0, 0, 0], armR: [0, 0, 0], armL: [0, 0, 0], legR: [0, 0, 0], legL: [0, 0, 0] };
+  let modelPitch = 0;
+  if (pose === 'walk') {
+    const a = s * 32;
+    P.armR[0] = a; P.armL[0] = -a; P.legR[0] = -a; P.legL[0] = a;
+    P.head[1] = Math.sin(phase * 0.5) * 4;
+  } else if (pose === 'run') {
+    const a = s * 58;
+    P.armR[0] = a; P.armL[0] = -a; P.legR[0] = -a; P.legL[0] = a;
+    P.body[0] = 13; P.head[0] = -9;                 /* 前倾一点，跑起来才有冲劲 */
+    P.head[1] = Math.sin(phase * 0.5) * 6;
+    P.armR[2] = -6; P.armL[2] = 6;                  /* 手臂别贴着身体穿模 */
+  } else if (pose === 'swim') {
+    modelPitch = 86;                                /* 整个人趴平：正面看就是头顶朝你、身子往后缩 */
+    P.head[0] = -74;                                /* 抬头换气，别把脸埋进水里 */
+    const a = Math.sin(phase);
+    P.armR[0] = -96 + a * 72; P.armL[0] = -96 - a * 72;   /* 自由泳交替划臂 */
+    P.armR[2] = -15; P.armL[2] = 15;
+    P.legR[0] = Math.sin(phase * 2) * 15; P.legL[0] = -P.legR[0];   /* 打腿 */
+  } else if (pose === 'sit') {
+    P.legR[0] = -84; P.legL[0] = -84;
+    P.legR[1] = -15; P.legL[1] = 15;                /* 两条腿微微分开，别叠在一起 */
+    P.armR[0] = -42; P.armL[0] = -42;
+  } else if (pose === 'sneak') {
+    P.body[0] = 24; P.head[0] = -20;
+    P.armR[0] = -34; P.armL[0] = -34;
+    P.legR[0] = -14; P.legL[0] = 14;
+  } else if (pose === 'hold') {
+    P.armR[0] = -82; P.armL[0] = -82;               /* 双手抬到胸前 */
+    P.armR[2] = -8; P.armL[2] = 8;
+  } else {
+    P.armR[0] = s * 2.5; P.armL[0] = -s * 2.5;      /* 站立：轻微呼吸 */
+    P.head[1] = Math.sin(phase * 0.5) * 3;
+  }
+  /* 头追鼠标叠加在姿势自带的头部角度上（模型空间，和拖动视角互不干扰） */
+  if (look) { P.head[1] += look.yaw || 0; P.head[0] += look.pitch || 0; }
+  return { P, modelPitch };
+}
+function rigDraw3D(ctx, cv, img, pose, phase, model, view, look) {
+  const W = cv.width, H = cv.height;
+  const U = Math.min(W / 26, H / 42);               /* 1 皮肤像素 = U 画布像素（留出旋转余量） */
+  const cx = W / 2, cy = H / 2 + 3 * U;
+  const yaw = view ? view.yaw : SKIN_VIEW_DEF.yaw;
+  const pitch = view ? view.pitch : SKIN_VIEW_DEF.pitch;
+  const M = skinRigModel(model);
+  const { P, modelPitch } = skinPose3D(pose, phase, look);
+  /* 模型整体：先按姿势俯仰（游泳），再按视角 yaw / pitch —— 都绕模型中心 (0,16,0) */
+  const spin = (p, yawA, pitchA, pivot) => {
+    let q = [p[0] - pivot[0], p[1] - pivot[1], p[2] - pivot[2]];
+    q = skinRot3(q, pitchA, yawA, 0);
+    return [q[0] + pivot[0], q[1] + pivot[1], q[2] + pivot[2]];
+  };
+  const toWorld = (part, p) => {
+    const rot = P[part] || [0, 0, 0];
+    const local = skinRot3([M[part].off[0] + p[0], M[part].off[1] + p[1], M[part].off[2] + p[2]], rot[0], rot[1], rot[2]);
+    return [M[part].pivot[0] + local[0], M[part].pivot[1] + local[1], M[part].pivot[2] + local[2]];
+  };
+  const toScreen = (w) => {
+    let q = spin(w, yaw, pitch, [0, 16, 0]);
+    if (modelPitch) q = spin(q, 0, modelPitch, [0, 16, 0]);
+    return [cx + q[0] * U, cy - (q[1] - 16) * U, q[2]];
+  };
+  const quads = [];
+  const LIGHT = (() => { const v = [0.32, 0.86, 0.4], n = Math.hypot(v[0], v[1], v[2]); return [v[0] / n, v[1] / n, v[2] / n]; })();
+  for (const part of Object.keys(M)) {
+    const box = M[part];
+    const [w, h, d] = box.size;
+    const half = [w / 2, h / 2, d / 2];
+    for (const ov of [false, true]) {
+      const rects = ov ? box.ov : box.uv;
+      if (!rects) continue;
+      const scale = ov ? 1.05 : 1;                  /* 第二层略大一点，跟游戏里一样浮在外面 */
+      for (const face of Object.keys(rects)) {
+        const f = SKIN_FACE[face], rect = rects[face];
+        const ext = (v) => Math.abs(v[0]) * half[0] + Math.abs(v[1]) * half[1] + Math.abs(v[2]) * half[2];
+        const hw = ext(f.r) * scale, hh = ext(f.u) * scale;
+        const cvec = [f.c[0] * half[0] * scale, f.c[1] * half[1] * scale, f.c[2] * half[2] * scale];
+        const mk = (sr, su) => toWorld(part, [
+          cvec[0] + f.r[0] * hw * sr + f.u[0] * hh * su,
+          cvec[1] + f.r[1] * hw * sr + f.u[1] * hh * su,
+          cvec[2] + f.r[2] * hw * sr + f.u[2] * hh * su]);
+        const w0 = mk(-1, 1), w1 = mk(1, 1), w2 = mk(1, -1), w3 = mk(-1, -1);
+        const s0 = toScreen(w0), s1 = toScreen(w1), s2 = toScreen(w2), s3 = toScreen(w3);
+        /* 外法线：先在模型空间算 r×u，跟整体旋转一起转过去，再看它在相机 z 上的分量 */
+        const rot = P[part] || [0, 0, 0];
+        const rw = skinRot3(skinRot3(f.r, rot[0], rot[1], rot[2]), pitch, yaw, 0);
+        const uw = skinRot3(skinRot3(f.u, rot[0], rot[1], rot[2]), pitch, yaw, 0);
+        let n = [rw[1] * uw[2] - rw[2] * uw[1], rw[2] * uw[0] - rw[0] * uw[2], rw[0] * uw[1] - rw[1] * uw[0]];
+        if (modelPitch) n = skinRot3(n, modelPitch, 0, 0);
+        if (n[2] <= 0.01) continue;                  /* 背面直接跳过，省一半绘制也避免排序打架 */
+        const nl = Math.hypot(n[0], n[1], n[2]) || 1;
+        const lit = Math.max(0, (n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]) / nl);
+        quads.push({
+          rect,
+          pts: [s0, s1, s2, s3],
+          z: (s0[2] + s1[2] + s2[2] + s3[2]) / 4 + (ov ? 0.08 : 0),
+          shade: (1 - (0.6 + 0.4 * lit)) * 0.5      /* 顶面最亮、侧面稍暗、底面最暗 */
+        });
+      }
+    }
+  }
+  /* 脚下阴影：没有它，人像浮在卡片中间 */
+  const feet = toScreen([0, 0, 0]);
+  const shW = 17 * U, shH = 3.6 * U;
+  const sg = ctx.createRadialGradient(feet[0], feet[1], 0, feet[0], feet[1], shW);
+  sg.addColorStop(0, 'rgba(0,0,0,.30)');
+  sg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.translate(feet[0], feet[1]);
+  ctx.scale(1, shH / shW);
+  ctx.beginPath(); ctx.arc(0, 0, shW, 0, Math.PI * 2);
+  ctx.fillStyle = sg; ctx.fill();
+  ctx.restore();
+
+  quads.sort((a, b) => a.z - b.z);                  /* 画家算法：远的先画 */
+  for (const q of quads) {
+    const [p0, p1, , p3] = q.pts;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]);
+    ctx.lineTo(q.pts[2][0], q.pts[2][1]); ctx.lineTo(p3[0], p3[1]);
+    ctx.closePath();
+    ctx.clip();                                     /* 裁掉斜边外的采样溢出 */
+    const ex0 = (p1[0] - p0[0]) / q.rect[2], ex1 = (p1[1] - p0[1]) / q.rect[2];
+    const ey0 = (p3[0] - p0[0]) / q.rect[3], ey1 = (p3[1] - p0[1]) / q.rect[3];
+    ctx.setTransform(ex0, ex1, ey0, ey1, p0[0], p0[1]);
+    ctx.drawImage(img, q.rect[0], q.rect[1], q.rect[2], q.rect[3], 0, 0, q.rect[2], q.rect[3]);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (q.shade > 0.01) { ctx.fillStyle = 'rgba(0,0,0,' + q.shade.toFixed(3) + ')'; ctx.fill(); }
+    ctx.restore();
+  }
+}
 /* 动作预览的动画驱动：只有面板还挂在文档里才继续跑（关掉弹窗立刻停，别在后台空转） */
 const SKIN_RIG = { raf: 0, cv: null, get: null, phase: 0, last: 0 };
 function skinRigStop() {
@@ -5341,14 +5613,25 @@ function skinRigStart(cv, get) {
   const loop = (t) => {
     const canvas = SKIN_RIG.cv;
     if (!canvas || !canvas.isConnected || !SKIN_RIG.get) { skinRigStop(); return; }
+    /* 账户页不在前台就别空转：画布留着最后一帧，切回来时 loadAccounts → renderSkinPreview
+       会重新起循环。以前弹窗关掉就停，现在画布常驻页面，得自己判断可见性。 */
+    const pg = canvas.closest('.page');
+    if (pg && !pg.classList.contains('active')) { SKIN_RIG.raf = 0; SKIN_RIG.cv = null; SKIN_RIG.get = null; return; }
     const dt = SKIN_RIG.last ? Math.min(80, t - SKIN_RIG.last) : 16;
     SKIN_RIG.last = t;
     let st = null;
     try { st = SKIN_RIG.get(); } catch (_) {}
     if (!st) { skinRigStop(); return; }
-    const speed = st.pose === 'run' ? 0.0105 : st.pose === 'walk' ? 0.0068 : 0.0021;
+    const speed = st.pose === 'run' ? 0.0105 : st.pose === 'walk' ? 0.0068
+      : st.pose === 'swim' ? 0.0115 : 0.0021;
     SKIN_RIG.phase = (SKIN_RIG.phase + dt * speed) % (Math.PI * 2);
-    paintSkinRig(canvas, st.dataUrl, st.pose, SKIN_RIG.phase, st.model);
+    /* 头部跟随做缓动（每帧追 18%），鼠标甩得快也不会硬拐 */
+    const lk = SKIN_LOOK.get(canvas);
+    if (lk) {
+      lk.yaw += (lk.tx - lk.yaw) * 0.18;
+      lk.pitch += (lk.ty - lk.pitch) * 0.18;
+    }
+    paintSkinRig(canvas, st.dataUrl, st.pose, SKIN_RIG.phase, st.model, lk || null);
     SKIN_RIG.raf = requestAnimationFrame(loop);
   };
   SKIN_RIG.raf = requestAnimationFrame(loop);
@@ -5414,13 +5697,13 @@ function renderAccounts(accounts, active) {
     }));
     row.addEventListener('click', (ev) => {
       if (ev.target.closest('button')) return;
-      renderSkinPreview(a.skinUrl);
+      renderSkinPreview(a);
     });
     gpMark(row);                       /* 账户行点击预览皮肤 → 手柄也要够得着 */
     box.appendChild(row);
   });
   const cur = list.find(x => x.name === active);
-  renderSkinPreview(cur ? cur.skinUrl : null);
+  renderSkinPreview(cur || null);
   heroHeadFor(active);
 }
 /* ---------------- 账户设置弹窗 ----------------
@@ -5431,7 +5714,6 @@ function renderAccounts(accounts, active) {
  * 每次改动后走 applyAccounts（列表 + 主页头像一起刷新）再 paint() 重画弹窗，弹窗始终显示最新状态。 */
 function openAccountSettings(name) {
   let cur = String(name || '');
-  let poseCur = 'idle';          /* 动作预览当前选中项（弹窗重绘后保持） */
   const accOf = () => (S.accounts || []).find(x => x.name === cur);
 
   function paint() {
@@ -5483,19 +5765,10 @@ function openAccountSettings(name) {
         '<div class="skin-lib-url"><input id="accLibUrlInput" placeholder="或粘贴皮肤图片直链（https://….png）"><button class="btn ghost sm" id="accLibUrl">添加</button></div>' +
       '</div>';
 
-    const poseName = (SKIN_POSES.find(x => x.k === poseCur) || SKIN_POSES[0]).t;
     modalBox.innerHTML =
       '<h3><svg class="ic sm"><use href="#i-user"/></svg> 账户设置 · <b>' + esc(a.name) + '</b></h3>' +
       '<div class="mmeta">' + typeTxt + (isCur ? ' · 当前正在使用的账户' : '') + '</div>' +
       '<div class="acc-set">' +
-        '<div class="acc-set-side">' +
-          '<div class="acc-rig-wrap"><canvas id="accSetSkin" width="180" height="264"></canvas></div>' +
-          '<div class="pose-row" id="accSetPoses">' +
-            SKIN_POSES.map(x => '<button class="pose-btn' + (x.k === poseCur ? ' on' : '') + '" data-pose="' + x.k + '">' + x.t + '</button>').join('') +
-          '</div>' +
-          '<div class="acc-set-cap">' + (a.skin ? '自定义皮肤' : '默认皮肤（游戏自动分配）') +
-            ' · <span id="accPoseName">' + poseName + '</span></div>' +
-        '</div>' +
         '<div class="acc-set-body">' +
           '<div class="acc-set-sec"><div class="acc-set-h"><svg class="ic sm"><use href="#i-user-check"/></svg> 皮肤</div>' + skinSec + '</div>' +
           libSec +
@@ -5507,23 +5780,8 @@ function openAccountSettings(name) {
         '<button class="btn ghost" id="accSetClose">关闭</button>' +
         (isCur ? '' : '<button class="btn primary" id="accSetUse">设为当前账户</button>') +
       '</div>';
-    /* 动作预览：动画驱动自己会重画（站立呼吸 / 行走摆动 / 奔跑加速） */
-    const rigCv = $('#accSetSkin');
-    const rigState = () => {
-      const aa = accOf();
-      return { dataUrl: aa ? aa.skinUrl : null, model: aa && aa.model === 'slim' ? 'slim' : 'classic', pose: poseCur };
-    };
-    skinRigStart(rigCv, rigState);
     const on = (sel, ev, fn) => { const e = $(sel); if (e) e.addEventListener(ev, fn); };
     (function bindPoseAndLib() {
-      $$('#accSetPoses .pose-btn').forEach(b => b.addEventListener('click', () => {
-        poseCur = b.dataset.pose;
-        $$('#accSetPoses .pose-btn').forEach(x => x.classList.toggle('on', x === b));
-        const nm = $('#accPoseName');
-        if (nm) nm.textContent = (SKIN_POSES.find(x => x.k === poseCur) || {}).t || '';
-        const st = rigState();
-        paintSkinRig(rigCv, st.dataUrl, st.pose, SKIN_RIG.phase || 0.9, st.model);
-      }));
       let libToken = 0;
       async function paintSkinLib() {
         const box = $('#accSkinLib');

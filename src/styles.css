@@ -389,11 +389,6 @@ body.light-bg .ms-net{ background:rgba(0,0,0,.03); }
    左边一块皮肤全身预览（160×320 的像素风画布，按 1:2 缩到 120×240 显示），右边按分区排设置项。
    分区用细线分隔：皮肤 / 皮肤模型 / 玩家名，读起来是一条条而不是一坨。 */
 .acc-set{ display:flex; gap:18px; align-items:flex-start; margin-top:14px; }
-.acc-set-side{ flex:none; width:120px; text-align:center; }
-.acc-set-side canvas{
-  width:120px; height:240px; display:block; image-rendering:pixelated;
-  border-radius:10px; background:rgba(127,127,127,.12);
-}
 .acc-set-cap{ font-size:11.5px; color:var(--tx3); margin-top:7px; }
 .acc-set-body{ flex:1; min-width:0; display:flex; flex-direction:column; gap:14px; }
 .acc-set-sec{ border-top:1px solid var(--line); padding-top:12px; }
@@ -402,7 +397,6 @@ body.light-bg .ms-net{ background:rgba(0,0,0,.03); }
 .acc-set-sec .hint{ margin:8px 0 0; }
 .acc-set-sec .btn-row{ margin-top:0; flex-wrap:wrap; }
 .acc-set-sec .field-line{ margin:0; }
-body.light-bg .acc-set-side canvas{ background:rgba(0,0,0,.06); }
 #page-mp .field-line input{ width:100%; }
 #page-mp .btn{ margin-top:4px; }
 #mpStatusLine{ color:var(--tx); }
@@ -1511,12 +1505,14 @@ body.light-bg .upd-fallback{ background:rgba(180,83,9,.06); border-color:rgba(18
 /* ============================================================
    账户设置：动作预览 + 皮肤库
    ============================================================ */
-.acc-set-side{ width:140px; }
-.acc-set-side .acc-rig-wrap canvas{ width:140px; height:205px; }
 .acc-rig-wrap{
   border-radius:12px;
   background:radial-gradient(circle at 50% 26%, rgba(127,127,127,.18), rgba(127,127,127,.04) 70%);
 }
+/* 3D 预览可以拖着转：光标给个抓手，触屏上别把拖动当成滚动 */
+canvas.skin-drag{ cursor:grab; touch-action:none; }
+canvas.skin-drag.dragging{ cursor:grabbing; }
+.acc-set-tip{ display:block; margin-top:3px; font-size:10.5px; color:var(--tx3); opacity:.72; }
 .pose-row{ display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-top:8px; }
 .pose-btn{
   font-size:11px; padding:4px 0; border-radius:7px; cursor:pointer; transition:.15s;
@@ -1524,6 +1520,18 @@ body.light-bg .upd-fallback{ background:rgba(180,83,9,.06); border-color:rgba(18
 }
 .pose-btn:hover{ border-color:var(--acc2); color:var(--acc2); }
 .pose-btn.on{ background:var(--acc); border-color:var(--acc); color:#fff; font-weight:700; }
+
+/* 账户页的皮肤预览：模型比弹窗里大一圈，动作按钮排在模型下方（5 个动作排一行） */
+.skin-play{ display:flex; gap:26px; align-items:center; flex-wrap:wrap; }
+.skin-play-stage{ flex:none; width:200px; text-align:center; }
+.skin-play-stage canvas{
+  width:200px; height:300px; display:block; image-rendering:pixelated;
+  border-radius:12px; background:rgba(127,127,127,.12);
+}
+body.light-bg .skin-play-stage canvas{ background:rgba(0,0,0,.06); }
+.skin-play .pose-row{ grid-template-columns:repeat(5,1fr); gap:3px; }
+.skin-play .acc-set-tip{ display:inline; margin-top:0; }
+.skin-play-text{ flex:1; min-width:260px; max-width:520px; font-size:13px; line-height:1.8; }
 .acc-set-sub{ font-style:normal; font-size:11px; font-weight:400; color:var(--tx3); margin-left:auto; }
 .skin-lib{
   display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:8px;
