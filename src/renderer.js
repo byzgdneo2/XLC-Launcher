@@ -5056,6 +5056,8 @@ const SKIN_PAGE = { pose: 'idle', model: 'classic', url: null };
 function renderSkinPreview(acc) {
   const cv = $('#skinPreview');
   if (!cv) return;
+  skinEggStop();                       /* 换人 / 重画账户页：先停掉上一个账户的彩蛋 */
+  if (SKIN_SQ) { SKIN_SQ.v = 0; SKIN_SQ.vel = 0; }
   const a = acc && typeof acc === 'object' ? acc : null;
   SKIN_PAGE.url = a ? (a.skinUrl || null) : null;
   SKIN_PAGE.model = a && a.model === 'slim' ? 'slim' : 'classic';
@@ -5069,6 +5071,7 @@ function renderSkinPreview(acc) {
     row.addEventListener('click', (ev) => {
       const b = ev.target.closest('.pose-btn');
       if (!b) return;
+      skinEggStop();
       SKIN_PAGE.pose = b.dataset.pose;
       $$('#skinPoseRow .pose-btn').forEach(x => x.classList.toggle('on', x === b));
       const nm = $('#skinPoseName');
@@ -5145,7 +5148,18 @@ function drawSkinHead(cv, dataUrl) {
     ctx.drawImage(img, 40, 8, 8, 8, 0, 0, cv.width, cv.height);
   });
 }
-function paintSkinRig(cv, dataUrl, pose, phase, model, look) {
+/* Q 弹的形变量：v > 0 压扁（变矮变宽），v < 0 回弹过头（变高变窄）。
+   早先用 0.17 / 0.26，一次点击只矮 20% 出头、弹完不到 0.2 秒，肉眼基本看不出（用户反馈「跟没Q弹差不多」）。
+   现在按「橡皮人」的比例给足量程：满压到 56% 高、宽 1.3 倍，回弹再拉到 1.18 倍高 —— 幅度一眼能看见。 */
+const SQ_WIDE = 0.30;      /* 横向最多补宽比例 */
+const SQ_SHORT = 0.42;     /* 纵向最多压矮比例 */
+const SQ_PRESS = 1;        /* 单击给的压扁量（= 满量程） */
+const SQ_STRETCH = 0.40;   /* 回弹过冲最多拉多高（v 的负向限位） */
+const SQ_K = 175;          /* 弹簧刚度：ω=√175≈13.2rad/s，压到底约 0.1 秒、一次完整弹跳 0.55 秒 */
+const SQ_C = 6;            /* 阻尼：ζ=c/(2ω)≈0.23，明显欠阻尼，松手后过冲到「拉长」再回正，颤两下才停 */
+const sqWide = (v) => 1 + v * SQ_WIDE;
+const sqShort = (v) => 1 - v * SQ_SHORT;
+function paintSkinRig(cv, dataUrl, pose, phase, model, look, sq) {
   if (!cv) return;
   const ctx = cv.getContext('2d');
   ctx.imageSmoothingEnabled = false;
@@ -5158,8 +5172,9 @@ function paintSkinRig(cv, dataUrl, pose, phase, model, look) {
        看着像人被削掉一半 —— 这种老格式直接走原来的平面画法。 */
     const legacy = img.width === 64 && img.height === 32;
     /* 穿甲那套「铁片贴纸」本来就是按正面画的，套到 3D 上会浮在模型外面，同样走平面画法 */
-    if (legacy || pose === 'armor') rigDrawFlat(ctx, cv, img, pose || 'idle', Number(phase) || 0, md);
-    else rigDraw3D(ctx, cv, img, pose || 'idle', Number(phase) || 0, md, skinViewOf(cv), look);
+    const q = Number(sq) || 0;                 /* Q 弹的压扁量（0 = 正常，1 = 压到最扁） */
+    if (legacy || pose === 'armor') rigDrawFlat(ctx, cv, img, pose || 'idle', Number(phase) || 0, md, q);
+    else rigDraw3D(ctx, cv, img, pose || 'idle', Number(phase) || 0, md, skinViewOf(cv), look, q);
   };
   skinImage(dataUrl, (img) => {
     if (img) return go(img);
@@ -5208,7 +5223,7 @@ function rigItemCube(ctx, x, y, s) {
   ctx.beginPath(); ctx.moveTo(h, -d + h * 0.55); ctx.lineTo(h, h * 0.55 + s * 0.5); ctx.stroke();
   ctx.restore();
 }
-function rigDrawFlat(ctx, cv, img, pose, phase, model) {
+function rigDrawFlat(ctx, cv, img, pose, phase, model, sq) {
   const W = cv.width, H = cv.height;
   const slim = model === 'slim';
   const armW = slim ? 3 : 4;
@@ -5225,6 +5240,24 @@ function rigDrawFlat(ctx, cv, img, pose, phase, model) {
   const topY = (H - 32 * U) / 2 + bob * U;
   const X = (v) => cx + v * U;
   const Y = (v) => topY + v * U;
+  /* Q 弹：整张画布以脚底为锚点压扁，横向同时变宽 —— 像被按了一下又弹回来，
+     而不是整体缩小。平面画法里没有 setTransform 重设坐标，套一层 ctx.scale 最省事。 */
+  const sqv = Number(sq) || 0;
+  const footY = topY + 32 * U;
+  let sqX = sqWide(sqv), sqY = sqShort(sqv);
+  /* 平面画法本来就把画布高度顶满（32U≈H），回弹拉长会直接把头顶切掉。
+     按画布余量把「往上拉」限死，横向同比例收回来，体积感不丢。 */
+  if (sqY > 1 && footY - topY > 0) {
+    const lim = (footY - 1) / (footY - topY);
+    /* 拉伸量被砍掉多少，横向就按同比例收窄（原本 sqY 拉高 ↔ sqX 变窄是同一个 v 的两面） */
+    if (sqY > lim) { const k = (sqY - lim) / SQ_SHORT; sqY = lim; sqX = 1 - k * SQ_WIDE; }
+  }
+  ctx.save();
+  if (sqv) {
+    ctx.translate(cx, footY);
+    ctx.scale(sqX, sqY);
+    ctx.translate(-cx, -footY);
+  }
 
   const sw = Math.sin(phase);
   let armA = 0.05 * Math.sin(phase);
@@ -5336,6 +5369,7 @@ function rigDrawFlat(ctx, cv, img, pose, phase, model) {
     rigPlate(ctx, X(0.3), Y(30), 4.1 * U, 2.4 * U, 0.8 * U);
     ctx.restore();
   }
+  ctx.restore();
 }
 /* ---------------- 皮肤预览：正交投影 3D ----------------
  * 为什么自己算、不引 three.js：模型只有 6 个长方体，正交投影下每个面投出来还是平行四边形，
@@ -5350,6 +5384,99 @@ function skinViewOf(cv) {
   if (!v) { v = { yaw: SKIN_VIEW_DEF.yaw, pitch: SKIN_VIEW_DEF.pitch }; SKIN_VIEW.set(cv, v); }
   return v;
 }
+/* ---------------- 坐下点一下：Q 弹 · 连点四下放彩蛋 ----------------
+ * 交互形态来自用户给的录屏（坐着点一下会弹一弹，连点会放歌），代码是照着这个「行为」独立写的：
+ * 点击只给一个「压扁冲量」，剩下的交给一根弹簧自己回弹 —— 所以按一下会连着颤两下，像橡皮人。
+ * 连点 4 次（每次间隔不超过 1.2 秒）触发彩蛋：放 BGM，模型绕自身竖轴转圈，并且每踩到一拍
+ * 就补一次和「点一下」完全一样的压扁冲量 —— 转着的同时也在一顿一顿地 Q 弹，不是轻轻起伏。
+ * 再点一下画面 / 切动作 / 切账户 / 离开账户页，都会立刻收住（音乐做 240ms 淡出，不硬掐）。 */
+const SKIN_SQ = { v: 0, vel: 0 };                       /* 弹簧：v 是当前压扁量，vel 是速度 */
+const SKIN_EGG = { n: 0, last: 0, on: false, t0: 0, spin: 0, baseYaw: 0, audio: null, beat: -1, ph: 0 };
+/* 彩蛋的鼓点：BGM 实测约 130 BPM（0.460 秒一拍），第一拍落在音频 0.22 秒处。
+   转圈时每拍补一次「和点一下完全一样」的压扁冲量 —— 不是轻轻晃，是跟着鼓点一下一下弹。 */
+const SKIN_EGG_BEAT = 0.46;
+const SKIN_EGG_PHASE = 0.22;
+function skinEggBeat(el) { return Math.floor((el / 1000 - SKIN_EGG_PHASE) / SKIN_EGG_BEAT); }
+/* 鼓点压扁：按「拍内相位」算一条连续曲线，而不是每拍把形状瞬间换成压扁的。
+   旧写法一拍只有一帧的变化（高度一帧内掉 34%），眼睛看到的是闪一下 —— 也就是「一顿一顿」。
+   现在踩到点那一刻开始往下压（0.17 秒压到底），再回弹过冲拉长，下一拍之前正好回到原样；
+   峰值还是单击那一档（SQ_PRESS / SQ_STRETCH），但每帧最多只变 7%，动作是连着的。 */
+const SKIN_EGG_PUNCH = { down: 0.36, up: 0.72, back: 1 };      /* 压到底 / 拉到最长 / 回正 的拍内相位 */
+function skinEggSquash(u) {
+  u -= Math.floor(u);
+  const P = SKIN_EGG_PUNCH;
+  /* 缓动掺三成五的直线：纯 smoothstep 中段太陡（一帧跳到 10%），掺完压到 7% 以内 */
+  const ease = t => {
+    const c = t < 0 ? 0 : t > 1 ? 1 : t;
+    return 0.35 * c * c * (3 - 2 * c) + 0.65 * c;
+  };
+  if (u < P.down) return SQ_PRESS * Math.sin(Math.PI / 2 * (u / P.down));
+  if (u < P.up) return SQ_PRESS - (SQ_PRESS + SQ_STRETCH) * ease((u - P.down) / (P.up - P.down));
+  if (u < P.back) return -SQ_STRETCH * (1 - ease((u - P.up) / (P.back - P.up)));
+  return 0;
+}
+const SKIN_EGG_SRC = '../assets/bangyouwine.mp3';
+const SKIN_EGG_GAP = 1200;                              /* 两次点击间隔超过这个就重新数 */
+function skinEggStop() {
+  if (!SKIN_EGG.on) return;
+  SKIN_EGG.on = false;
+  SKIN_EGG.n = 0;
+  /* 曲线算出来的当前形变交给弹簧收尾：停的那一刻接着弹完，不会从压扁硬跳回原样 */
+  SKIN_SQ.v = skinEggSquash(SKIN_EGG.ph);
+  SKIN_SQ.vel = 0;
+  const cv = document.getElementById('skinPreview');
+  if (cv) {
+    const v = skinViewOf(cv);
+    v.yaw = SKIN_EGG.baseYaw;                           /* 把彩蛋转过的角度收回去 */
+    cv.classList.remove('egg');
+  }
+  const au = SKIN_EGG.audio;
+  SKIN_EGG.audio = null;
+  if (au) {
+    let vol = au.volume;
+    const fade = setInterval(() => {
+      vol -= 0.09;
+      if (vol <= 0) {
+        clearInterval(fade);
+        try { au.pause(); au.currentTime = 0; } catch (_) {}
+        return;
+      }
+      try { au.volume = vol; } catch (_) {}
+    }, 24);
+  }
+}
+function skinEggStart(cv) {
+  if (!cv || SKIN_EGG.on) return;
+  SKIN_EGG.on = true;
+  SKIN_EGG.t0 = performance.now();
+  SKIN_EGG.spin = 0;
+  SKIN_EGG.baseYaw = skinViewOf(cv).yaw;
+  SKIN_EGG.n = 0;
+  SKIN_EGG.beat = -1;                                   /* 从头数拍子 */
+  /* 第四下点击刚把小人压到最扁 —— 就从「压到底」这一相位接着往下演，第一拍接得上，不会突然弹回原样 */
+  SKIN_EGG.ph = SKIN_EGG_PUNCH.down;
+  cv.classList.add('egg');
+  try {
+    const au = new Audio(SKIN_EGG_SRC);
+    au.volume = 0.5;                                    /* 只是个彩蛋，别盖过别的声音 */
+    au.onended = () => skinEggStop();
+    SKIN_EGG.audio = au;
+    const p = au.play();
+    if (p && p.catch) p.catch(() => {});                /* 没有音频设备时静默失败，动画照放 */
+  } catch (_) {}
+}
+/* 点一下（拖动不算）：先弹一下；坐下时计数，连到 4 次就开彩蛋 */
+function skinPoke(cv) {
+  if (!cv || SKIN_RIG.cv !== cv) return;                 /* 下载页那种一次性静态预览不参与 */
+  /* 只有「坐下」这一套姿势响应点击（用户指定）：别的姿势点一下什么都不发生，免得和拖转视角打架 */
+  if (SKIN_PAGE.pose !== 'sit') { SKIN_EGG.n = 0; return; }
+  SKIN_SQ.v = Math.min(1, SKIN_SQ.v + SQ_PRESS);
+  SKIN_SQ.vel = 0;
+  const now = performance.now();
+  SKIN_EGG.n = (now - SKIN_EGG.last <= SKIN_EGG_GAP) ? SKIN_EGG.n + 1 : 1;
+  SKIN_EGG.last = now;
+  if (SKIN_EGG.n >= 4) skinEggStart(cv);
+}
 /* 拖动旋转 + 双击复位。同一个 canvas 只绑一次（弹窗每次重绘都是新节点，用 dataset 记）。
    draw 传了就用自己的重画函数（下载页那种一次性静态预览没有动画循环）。 */
 const SKIN_DRAW = new WeakMap();
@@ -5359,7 +5486,7 @@ function bindSkinDrag(cv, draw) {
   cv.classList.add('skin-drag');
   cv.title = '拖动旋转视角 · 双击复位';
   if (draw) SKIN_DRAW.set(cv, draw);
-  let sx = 0, sy = 0, y0 = 0, p0 = 0, on = false;
+  let sx = 0, sy = 0, y0 = 0, p0 = 0, on = false, t0 = 0, moved = 0;
   const repaint = () => {
     const fn = SKIN_DRAW.get(cv);
     if (fn) { fn(); return; }
@@ -5368,12 +5495,15 @@ function bindSkinDrag(cv, draw) {
   };
   cv.addEventListener('pointerdown', (e) => {
     on = true; sx = e.clientX; sy = e.clientY;
+    t0 = performance.now(); moved = 0;
+    skinEggStop();                       /* 彩蛋转着的时候按一下就先收住，不跟拖动抢方向 */
     const v = skinViewOf(cv); y0 = v.yaw; p0 = v.pitch;
     cv.classList.add('dragging');
     try { cv.setPointerCapture(e.pointerId); } catch (_) {}
   });
   cv.addEventListener('pointermove', (e) => {
     if (!on) return;
+    moved = Math.max(moved, Math.hypot(e.clientX - sx, e.clientY - sy));
     const v = skinViewOf(cv);
     v.yaw = y0 + (e.clientX - sx) * 0.55;
     /* 上下跟手：往上拖，模型跟着往上翻（露出下巴），往下拖才往下压（看到头顶）。
@@ -5382,7 +5512,12 @@ function bindSkinDrag(cv, draw) {
     repaint();
   });
   const stop = () => { on = false; cv.classList.remove('dragging'); };
-  cv.addEventListener('pointerup', stop);
+  cv.addEventListener('pointerup', () => {
+    const wasOn = on;
+    stop();
+    /* 位移小、时间短 → 算「点了一下」而不是拖动转视角 */
+    if (wasOn && moved < 6 && performance.now() - t0 < 600) skinPoke(cv);
+  });
   cv.addEventListener('pointercancel', stop);
   cv.addEventListener('dblclick', () => {
     const v = skinViewOf(cv);
@@ -5520,7 +5655,7 @@ function skinPose3D(pose, phase, look) {
   if (look) { P.head[1] += look.yaw || 0; P.head[0] += look.pitch || 0; }
   return { P, modelPitch };
 }
-function rigDraw3D(ctx, cv, img, pose, phase, model, view, look) {
+function rigDraw3D(ctx, cv, img, pose, phase, model, view, look, sq) {
   const W = cv.width, H = cv.height;
   const U = Math.min(W / 26, H / 42);               /* 1 皮肤像素 = U 画布像素（留出旋转余量） */
   const cx = W / 2, cy = H / 2 + 3 * U;
@@ -5539,10 +5674,15 @@ function rigDraw3D(ctx, cv, img, pose, phase, model, view, look) {
     const local = skinRot3([M[part].off[0] + p[0], M[part].off[1] + p[1], M[part].off[2] + p[2]], rot[0], rot[1], rot[2]);
     return [M[part].pivot[0] + local[0], M[part].pivot[1] + local[1], M[part].pivot[2] + local[2]];
   };
+  /* Q 弹：以脚底（世界 y=0）为锚点，把投影出来的屏幕坐标压扁/拉长、横向补宽。
+     不能在外面套 ctx.scale —— 每个面都要 setTransform 做仿射映射，一层外层变换会被它清掉。 */
+  const sqv = Number(sq) || 0;
+  const sqX = sqWide(sqv), sqY = sqShort(sqv);
+  const footY = cy + 16 * U;                     /* toScreen([0,0,0]) 的 y，恒等于这个值 */
   const toScreen = (w) => {
     let q = spin(w, yaw, pitch, [0, 16, 0]);
     if (modelPitch) q = spin(q, 0, modelPitch, [0, 16, 0]);
-    return [cx + q[0] * U, cy - (q[1] - 16) * U, q[2]];
+    return [cx + q[0] * U * sqX, footY + (cy - (q[1] - 16) * U - footY) * sqY, q[2]];
   };
   const quads = [];
   const LIGHT = (() => { const v = [0.32, 0.86, 0.4], n = Math.hypot(v[0], v[1], v[2]); return [v[0] / n, v[1] / n, v[2] / n]; })();
@@ -5583,8 +5723,18 @@ function rigDraw3D(ctx, cv, img, pose, phase, model, view, look) {
       }
     }
   }
+  /* 越界兜底：侧身 + 满压扁时腿会顶出画布左右边（坐下姿势腿往前伸，转到 90° 正好甩到侧面）。
+     整体平移一点点把它拉回画面里 —— 只在越界时才动，平时构图完全不变，也不改大小。 */
+  let mnx = Infinity, mxx = -Infinity;
+  for (const q of quads) for (const p of q.pts) { if (p[0] < mnx) mnx = p[0]; if (p[0] > mxx) mxx = p[0]; }
+  let dx = 0;
+  if (mxx > W - 2) dx = W - 2 - mxx;
+  if (mnx + dx < 2) dx = 2 - mnx;               /* 两边都超就先保左边，宁可右边裁一点 */
+  if (dx) for (const q of quads) for (const p of q.pts) p[0] += dx;
+
   /* 脚下阴影：没有它，人像浮在卡片中间 */
   const feet = toScreen([0, 0, 0]);
+  feet[0] += dx;
   const shW = 17 * U, shH = 3.6 * U;
   const sg = ctx.createRadialGradient(feet[0], feet[1], 0, feet[0], feet[1], shW);
   sg.addColorStop(0, 'rgba(0,0,0,.30)');
@@ -5630,7 +5780,10 @@ function skinRigStart(cv, get) {
     /* 账户页不在前台就别空转：画布留着最后一帧，切回来时 loadAccounts → renderSkinPreview
        会重新起循环。以前弹窗关掉就停，现在画布常驻页面，得自己判断可见性。 */
     const pg = canvas.closest('.page');
-    if (pg && !pg.classList.contains('active')) { SKIN_RIG.raf = 0; SKIN_RIG.cv = null; SKIN_RIG.get = null; return; }
+    if (pg && !pg.classList.contains('active')) {
+      skinEggStop();                                   /* 离开账户页就别在后台放歌 */
+      SKIN_RIG.raf = 0; SKIN_RIG.cv = null; SKIN_RIG.get = null; return;
+    }
     const dt = SKIN_RIG.last ? Math.min(80, t - SKIN_RIG.last) : 16;
     SKIN_RIG.last = t;
     let st = null;
@@ -5645,7 +5798,37 @@ function skinRigStart(cv, get) {
       lk.yaw += (lk.tx - lk.yaw) * 0.18;
       lk.pitch += (lk.ty - lk.pitch) * 0.18;
     }
-    paintSkinRig(canvas, st.dataUrl, st.pose, SKIN_RIG.phase, st.model, lk || null);
+    /* Q 弹：按一下给冲量，之后全靠这根弹簧 —— 阻尼略小于临界值，所以会多弹两下才停 */
+    const dts = Math.min(0.05, dt / 1000);
+    SKIN_SQ.vel += (-SQ_K * SKIN_SQ.v - SQ_C * SKIN_SQ.vel) * dts;
+    SKIN_SQ.v += SKIN_SQ.vel * dts;
+    if (SKIN_SQ.v < -SQ_STRETCH) { SKIN_SQ.v = -SQ_STRETCH; if (SKIN_SQ.vel < 0) SKIN_SQ.vel = 0; }
+    let sq = SKIN_SQ.v;
+    if (SKIN_EGG.on) {
+      /* 跟着音频时钟走，而不是墙钟：音乐卡一下 / 起播慢半拍，鼓点也不会飘 */
+      const au = SKIN_EGG.audio;
+      const el = (au && !au.paused && au.currentTime > 0) ? au.currentTime * 1000 : performance.now() - SKIN_EGG.t0;
+      SKIN_EGG.spin += dt * 0.24;                     /* 约 240°/秒，一圈 1.5 秒 */
+      const v = skinViewOf(canvas);
+      v.yaw = SKIN_EGG.baseYaw + SKIN_EGG.spin;
+      /* 相位自己按帧往前走（每帧都连续），只用音频时钟轻轻往回拽 —— 直接拿 audio.currentTime
+         算相位的话，媒体时钟一跳（几十毫秒的粒度）动作就跟着抖，那也是一种「一顿一顿」。 */
+      let ph = SKIN_EGG.ph + dt / (SKIN_EGG_BEAT * 1000);
+      if (au && !au.paused && au.currentTime > 0) {
+        let tp = (el / 1000 - SKIN_EGG_PHASE) / SKIN_EGG_BEAT;
+        tp -= Math.floor(tp);
+        let d = tp - (ph - Math.floor(ph));
+        if (d > 0.5) d -= 1;
+        if (d < -0.5) d += 1;
+        ph += d * 0.12;                               /* 每帧拉 12%，几帧就对齐，过程看不出来 */
+      }
+      ph -= Math.floor(ph);
+      SKIN_EGG.ph = ph;
+      const bt = skinEggBeat(el);                     /* 拍子计数留着（调试/测试用） */
+      if (bt > SKIN_EGG.beat) SKIN_EGG.beat = bt;
+      sq = skinEggSquash(ph);
+    }
+    paintSkinRig(canvas, st.dataUrl, st.pose, SKIN_RIG.phase, st.model, lk || null, sq);
     SKIN_RIG.raf = requestAnimationFrame(loop);
   };
   SKIN_RIG.raf = requestAnimationFrame(loop);
