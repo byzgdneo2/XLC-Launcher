@@ -28,7 +28,8 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 1.4-rc1 | `XLC-Launcher-1.4-rc1-portable.exe` | 候选版（最新）：账户页皮肤预览活了 —— 坐下点一下画面小人会 Q 弹（压扁再弹回来）、连点 4 次触发彩蛋：转圈 + 放 BGM + 跟着鼓点每拍弹一下；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4 | `XLC-Launcher-1.4-portable.exe` | 正式版（最新）：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新改为官网优先下载、GitHub 兜底，两条都不通会直接提示下载失败。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.4-rc1 | `XLC-Launcher-1.4-rc1-portable.exe` | 候选版：账户页皮肤预览活了 —— 坐下点一下画面小人会 Q 弹（压扁再弹回来）、连点 4 次触发彩蛋：转圈 + 放 BGM + 跟着鼓点每拍弹一下；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-pre1 | `XLC-Launcher-1.4-pre1-portable.exe` | 预发布：1.4 进入预发布阶段，这一版没有新功能，全在收口 —— 账户页「默认皮肤」两处说法统一（以前一边写史蒂夫、一边写按 UUID 分配）；插件安装补 CSP 前校验入口仍在解包目录内、整合包下载临时文件名只取 basename；账户页皮肤预览遇到坏图不再每帧重试解码，图片缓存加 32 条上限。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot6 | `XLC-Launcher-1.4-snapshot6-portable.exe` | 上一快照：账户页的皮肤预览换成 3D —— 皮肤贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），侧面背面都能看、明暗跟着角度走；鼠标在启动器窗口里移动时头会跟着转（左右 ±46°、上下 ±26°，移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行就换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认）。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
 | 1.4-snapshot5 | `XLC-Launcher-1.4-snapshot5-portable.exe` | 上一快照：整合包导入实测修复 —— 分段下载不再永久卡死（本段收满即走 + 25 秒空闲超时）、Fabric / Quilt 加载器 jar 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |

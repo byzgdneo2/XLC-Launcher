@@ -155,6 +155,7 @@ try {
    → **1.4-snapshot6（账户页皮肤预览换 3D：贴图贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），有侧面背面与明暗，头跟启动器窗口里的鼠标转（左右 ±46°、上下 ±26°，移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认）；64×32 老皮肤仍走平面画法）**
    → **1.4-pre1（1.4 预发布：账户页「默认皮肤」两处说法统一（以前一边写史蒂夫、一边写按 UUID 分配）；插件安装补 CSP 前校验入口仍在解包目录内、整合包下载临时文件名取 basename；账户页皮肤预览遇到坏图不再每帧重试解码，图片缓存加 32 条上限）**
    → **1.4-rc1（1.4 候选版：账户页坐下点一下会 Q 弹、连点 4 次触发转圈彩蛋（放 BGM、跟着鼓点每拍一弹）；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底）**
+   → **1.4（正式版：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新的下载通道改为官网优先、GitHub 兜底，两条都不通直接提示下载失败）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -163,7 +164,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.4-rc1';
+const APP_VERSION = '1.4';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -11148,6 +11149,33 @@ function buildUpdateHistory(downloads, current) {
   return list;
 }
 
+/* 正式版更新的「下载通道顺序」：官网网盘优先、GitHub 附件兜底（1.4 正式版起）。
+   检测仍然只走 GitHub —— 它是版本号与公告的唯一来源；这里只决定「包从哪儿下」：
+   · 只有正式版（formal=true）才改道；快照 / 候选版官网通常还没传，维持 GitHub 单通道；
+   · 正式版一律先试官网：官网下载页里挂了同名文件就用页面给的地址，没挂就按网盘目录规则拼
+     （pan/xlc-launcher/<文件名>）—— 页面还没来得及更新也能走官网；
+   · 官网这条走不通（404 / 连不上 / 哈希对不上）时，update:download 自动换 alt 里的 GitHub 附件；
+     两条都不通才报「下载更新失败」。
+   official=true 表示「这一项是官网优先的」，officialListed 表示官网页面确实挂着它。
+   纯函数（不修改入参），便于离线自测。 */
+function preferOfficialForFormal(downloads, official, formal) {
+  const list = (downloads || []).map(d => Object.assign({}, d));
+  if (!formal) return list;
+  const pool = (Array.isArray(official) ? official : []).filter(o => o && o.url && isOfficialPanUrl(o.url));
+  const key = s => String(s || '').trim().toLowerCase();
+  for (const d of list) {
+    if (!d.url || isOfficialPanUrl(d.url)) continue;
+    const hit = pool.find(o => key(o.name) === key(d.name))
+      || pool.find(o => o.version && d.version && normVer(o.version) === normVer(d.version) && o.kind && o.kind === d.kind);
+    const off = (hit && hit.url) ? hit.url : officialDlUrl(d.name);
+    if (!off || off === d.url) continue;
+    d.alt = [d.url];
+    d.url = off;
+    d.official = true;
+    d.officialListed = !!hit;
+  }
+  return list;
+}
 /* 版本解析 / 比较的纯函数自测（LMC_SMOKE_UPDATE=1 触发，离线可跑） */
 function updateParserSelfTest() {
   const lines = [];
@@ -11309,6 +11337,23 @@ function updateParserSelfTest() {
   ok(officialDlUrl('XLC-Launcher-1.2-portable.exe') ===
     'https://neo2-pan.app.workbuddy.host/pan/xlc-launcher/XLC-Launcher-1.2-portable.exe',
     'T16u 官网直链拼接规则', officialDlUrl('XLC-Launcher-1.2-portable.exe'));
+  /* 1.4 正式版：正式版更新的下载通道 = 官网优先、GitHub 兜底（检测仍走 GitHub） */
+  const ghDl = [{ name: 'XLC-Launcher-' + CV + '-portable.exe',
+    url: 'https://github.com/byzgdneo2/XLC-Launcher/releases/download/v' + CV + '/XLC-Launcher-' + CV + '-portable.exe',
+    version: CV, kind: '便携版' }];
+  const offDl = [{ name: 'XLC-Launcher-' + CV + '-portable.exe', url: officialDlUrl('XLC-Launcher-' + CV + '-portable.exe'),
+    version: CV, kind: '便携版' }];
+  const pf1 = preferOfficialForFormal(ghDl, offDl, true);
+  ok(isOfficialPanUrl(pf1[0].url) && pf1[0].official === true && pf1[0].alt && /github\.com/.test(pf1[0].alt[0]),
+    'T16v 正式版更新改成「官网优先」、GitHub 附件留作兜底', pf1[0].url);
+  const pf2 = preferOfficialForFormal(ghDl, [], true);
+  ok(isOfficialPanUrl(pf2[0].url) && pf2[0].officialListed === false && /github\.com/.test(pf2[0].alt[0]),
+    'T16w 官网页面还没挂这个文件时也先试官网（按网盘目录规则拼直链），GitHub 仍留作兜底', pf2[0].url);
+  const pf3 = preferOfficialForFormal(ghDl, offDl, false);
+  ok(/github\.com/.test(pf3[0].url) && !pf3[0].alt,
+    'T16x 快照 / 候选版不受影响（下载仍只走 GitHub）', pf3[0].url);
+  ok(/github\.com/.test(ghDl[0].url) && !ghDl[0].alt,
+    'T16y 改道是纯函数，不改入参（缓存里的下载项还为 GitHub 原址）', ghDl[0].url);
   const cl = currentChangelog();
   ok(!!cl, 'T17 当前版本有内置更新公告', cl ? cl.version : '缺失');
   /* 开发中的版本（dev:true）允许公告还没写完 —— 否则每开一个新版本都会立刻
@@ -11381,14 +11426,14 @@ function updateParserSelfTest() {
  * 这里只保留「当前版本」一条：更新日志界面因此不再罗列一大串历史版本。
  * 首次以新版本运行时会自动弹出公告，设置 → 版本更新 里也能随时查看。
  * 每次发版：把 version 改成 APP_VERSION，替换掉这一条的内容即可（不用往里追加）。
- * 1.4-rc1 之前的 29 条历史公告原文照录在 docs/CHANGELOG-history.md，需要查旧记录去那里看。
+ * 1.4 之前的 30 条历史公告原文照录在 docs/CHANGELOG-history.md，需要查旧记录去那里看。
  * 公告属于当前版本：改完就往这条里加条目，别再动已经发出去的内容（那是改写历史）。 */
 const CHANGELOG = [
   {
-    version: '1.4-rc1',
-    date: '2026-11-10',
-    tag: '1.4 候选版',
-    notice: '1.4 候选版：账户页的皮肤预览活了 —— 坐下姿势点一下画面，小人会被按扁再弹起来（像橡皮人）；连点 4 次还能触发彩蛋：小人转着圈、跟着 BGM 的鼓点一下一下弹。彩蛋的弹跳从「每拍瞬间换成压扁形状」改成连续曲线，不再一顿一顿地闪。',
+    version: '1.4',
+    date: '2026-11-11',
+    tag: '正式版',
+    notice: '1.4 正式版：账户页的皮肤预览活了 —— 坐下姿势点一下画面，小人会被按扁再弹起来；连点 4 次还有彩蛋：小人转着圈、跟着 BGM 的鼓点一下一下弹。这一版还把正式版更新的下载顺序改了：先走官网，官网不通再走 GitHub，两条都不通会直接告诉你下载失败。',
     groups: [
       {
         icon: 'i-user',
@@ -11405,6 +11450,14 @@ const CHANGELOG = [
         items: [
           '**每拍不再瞬间换成压扁形状**：以前一拍只差一帧（33ms 内身高掉三分之一），看着像闪烁；现在改成按拍内相位算的连续曲线 —— 踩点开始下压、0.17 秒到底、回弹过冲拉长、下一拍之前回正，60fps 下相邻帧身高变化不超过 7%',
           '**鼓点跟着音频时钟对齐**：相位自己按帧往前走，只用播放进度每帧轻拉校准 —— 音乐起播慢半拍、中途卡一下，动作都不会跟着抖；没有音频设备时退回系统时钟，动画照放'
+        ]
+      },
+      {
+        icon: 'i-download',
+        title: '改进 · 正式版更新优先走官网，GitHub 兜底',
+        items: [
+          '**检测照旧走 GitHub，下载换了顺序**：检测到的这一版是正式版、官网下载页上也挂着这个文件时，下载默认从官网网盘拿；官网没有这个文件、或者下载半路失败，自动改用 GitHub 附件重试一次 —— 快照 / 候选版不受影响，还是走 GitHub',
+          '**两条通道都不通就直接说清楚**：不会再停在一个不动的进度条上，会明确提示「下载更新失败」，并说明是官网和 GitHub 都没连上，可以稍后重试或到下载页手动下载'
         ]
       },
       {
@@ -11516,7 +11569,10 @@ async function doUpdateCheckGitHub(persist) {
   const parsed = parseGitHubRelease(JSON.parse(buf.toString('utf8')));
   if (!parsed.version) throw new Error('GitHub Release 响应里没有可识别的版本号');
   const histDl = await fetchOfficialHistoryDl();   /* 只影响版本回退列表，失败留空不阻断 */
+  /* 正式版：官网挂了同一个文件就改成「官网优先、GitHub 兜底」；快照 / 候选版维持 GitHub 单通道 */
+  parsed.downloads = preferOfficialForFormal(parsed.downloads, histDl, !isPreVer(parsed.version));
   const info = updateInfoFrom(parsed, parsed.pageUrl || GH_RELEASE_PAGE, 'GitHub', histDl);
+  info.dlViaOfficial = parsed.downloads.some(d => d && d.official);
   UPDATE_CACHE = info;
   if (persist) { config.lastUpdateCheck = info.checkedAt; saveConfigNow(); }
   return info;
@@ -11569,22 +11625,38 @@ function updatePreferredDir() {
 ipcMain.handle('update:download', async (e, p) => {
   netReset();
   const o = p || {};
-  const url = String(o.url || '').trim();
-  if (!/^https?:\/\//i.test(url)) return { ok: false, error: '下载地址无效' };
-  /* 只允许从官方更新源所在主机下载更新包（防「改地址 → 下恶意包」） */
-  if (!updateHostAllowed(url)) {
-    logLine('[update] 已拒绝非官方下载地址：' + url);
+  /* 下载通道顺序（1.4 正式版起）：官网优先 → GitHub 兜底。渲染层把 alt 一起带下来，
+     版本回退只有官网一条。逐条试，前一条失败（404 / 半路断开 / 写盘失败）才换下一条。 */
+  const urls = [];
+  for (const u of [o.url].concat(Array.isArray(o.alt) ? o.alt : [])) {
+    const s = String(u || '').trim();
+    if (!/^https?:\/\//i.test(s) || urls.indexOf(s) >= 0) continue;
+    urls.push(s);
+  }
+  if (!urls.length) return { ok: false, error: '下载地址无效' };
+  /* 只允许从官方更新源所在主机下载更新包（防「改地址 → 下恶意包」）—— 有一条不合格就整单拒绝 */
+  const bad = urls.find(u => !updateHostAllowed(u));
+  if (bad) {
+    logLine('[update] 已拒绝非官方下载地址：' + bad);
     let host = '';
     try { host = new URL(updateSourceUrl()).host; } catch (_) {}
     return { ok: false, error: '更新包只允许从官方更新源下载（' + host + '），该地址已被拒绝' };
   }
   if (UPDATE_JOB) return { ok: false, error: '已有一个更新下载任务在进行中' };
-  const name = path.basename(String(o.name || url.split('/').pop() || 'XLC-Launcher-update.exe').split('?')[0]) || 'XLC-Launcher-update.exe';
+  const name = path.basename(String(o.name || urls[0].split('/').pop() || 'XLC-Launcher-update.exe').split('?')[0]) || 'XLC-Launcher-update.exe';
   const ctrl = new AbortController();
   const push = (d) => { try { e.sender.send('update:progress', d); } catch (_) {} };
-  const run = async (dest) => {
+  const dlDir = () => { try { return app.getPath('downloads'); } catch (_) { return DATA_DIR; } };
+  /* 落点：便携版 → 程序同目录；不可写就用系统下载目录。一次判定，别每换一条通道再试一遍 */
+  const dirs = (() => {
+    const a = updatePreferredDir(), b = dlDir();
+    if (path.resolve(a) === path.resolve(b)) return [a];
+    try { fs.accessSync(a, fs.constants.W_OK); return [a, b]; } catch (_) { return [b]; }
+  })();
+  const run = async (dir, url) => {
+    const dest = path.join(dir, name);
     UPDATE_JOB = { ctrl, dest, name };
-    push({ phase: 'start', name, dest, pct: 0 });
+    push({ phase: 'start', name, dest, pct: 0, url, official: isOfficialPanUrl(url) });
     await downloadBig(url, dest, (pct, got, total) => push({ phase: 'downloading', name, dest, pct, got, total }), ctrl.signal);
     const size = (await fsp.stat(dest)).size;
     /* 下完立刻算 sha256：① 清单里带了就当场比对（镜像投毒/内容被换），不匹配直接删包；
@@ -11597,22 +11669,55 @@ ipcMain.handle('update:download', async (e, p) => {
       throw new Error('更新包校验失败（sha256 不匹配），已删除损坏文件，请重试或稍后再试');
     }
     if (/^[a-f0-9]{64}$/.test(want)) logLine('[update] 更新包 sha256 校验通过: ' + sha);
-    return { ok: true, path: dest, name, size, dir: path.dirname(dest), sha256: sha };
+    return { ok: true, path: dest, name, size, dir: path.dirname(dest), sha256: sha, from: isOfficialPanUrl(url) ? '官网' : 'GitHub' };
+  };
+  /* 单条直链：按 dirs 顺序落盘（只对写盘类错误换目录，网络错误换目录也没用） */
+  const runOne = async (url) => {
+    let lastErr = null;
+    for (const dir of dirs) {
+      try { return await run(dir, url); }
+      catch (err) {
+        if (ctrl.signal.aborted) throw err;
+        lastErr = err;
+        const fsErr = /^(EACCES|EPERM|EROFS|ENOSPC|EBUSY|EISDIR)$/.test(String((err && err.code) || ''));
+        if (!fsErr) throw err;
+        logLine('[update] 目录 ' + dir + ' 写入失败，换下一个落点: ' + err.message);
+      }
+    }
+    throw lastErr || new Error('无法写入下载目录');
   };
   try {
-    let r;
-    try {
-      r = await run(path.join(updatePreferredDir(), name));
-    } catch (err) {
-      if (ctrl.signal.aborted) throw err;
-      /* 首选目录不可写（如装在 Program Files）→ 回退系统下载目录重试一次 */
-      const fb = (() => { try { return app.getPath('downloads'); } catch (_) { return DATA_DIR; } })();
-      if (path.resolve(fb) === path.resolve(updatePreferredDir())) throw err;
-      logLine('[update] 首选目录写入失败，回退下载目录: ' + err.message);
-      r = await run(path.join(fb, name));
+    let r = null;
+    const fails = [];
+    for (let i = 0; i < urls.length; i++) {
+      if (i) {
+        logLine('[update] 上一条通道失败，换下一条：' + urls[i].slice(0, 140));
+        push({ phase: 'retry', name, mirror: i, total: urls.length, official: isOfficialPanUrl(urls[i]) });
+      }
+      try { r = await runOne(urls[i]); break; }
+      catch (err) {
+        if (ctrl.signal.aborted) throw err;
+        fails.push(err.message || String(err));
+        /* 半截文件不能留：下一条通道会以为「已经下好了」，也可能被当成有效更新包 */
+        for (const dir of dirs) { try { await fsp.unlink(path.join(dir, name)); } catch (_) {} }
+      }
+    }
+    if (!r) {
+      /* 两条通道都失败 → 明确告诉用户「下载更新失败」，不再让进度条停在那儿 */
+      if (fails.length > 1) {
+        logLine('[update] 全部下载通道失败: ' + fails.join(' | '));
+        const chans = [];
+        for (const u of urls) {
+          const c = isOfficialPanUrl(u) ? '官网' : 'GitHub';
+          if (chans.indexOf(c) < 0) chans.push(c);
+        }
+        const what = chans.length > 1 ? chans.join(' 与 ') : (chans[0] || '下载') + '的两条直链';
+        throw new Error('更新包下载失败：' + what + '都没能下下来，请稍后重试或到下载页手动下载');
+      }
+      throw new Error(fails[0] || '未知错误');
     }
     push({ phase: 'done', name, dest: r.path, pct: 100, size: r.size });
-    logLine('[update] 更新包已下载: ' + r.path);
+    logLine('[update] 更新包已下载（' + r.from + '）: ' + r.path);
     return r;
   } catch (err) {
     const cancelled = ctrl.signal.aborted;

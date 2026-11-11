@@ -4706,7 +4706,8 @@ async function loadMods() {
     currentModsMeta = er.meta || {};
     renderModRows(instance);
   }
-  /* 富化完顺手查更新（主进程有 15 分钟缓存，切页不会反复联网；「检查更新」按钮才强制刷新） */
+  /* 富化完顺手查更新（15 分钟缓存是**主进程对 MOD 更新查询**的，
+     跟上面「启动器版本更新」的检测无关；切页不会反复联网，「检查更新」按钮才强制刷新） */
   checkModUpdates(instance, false);
 }
 function renderModRows(instance) {
@@ -9198,13 +9199,37 @@ window.lmc.on('server:progress', (d) => {
 /* ---------------- 版本更新（设置页） ----------------
  * 检测开发者发布的下载页 → 对比本机版本 → 发现新版可直接在启动器内下载、
  * 运行安装包，或（便携版）一键覆盖重启，全程不需要开发者模式。 */
-const UPD = { info: null, dl: null, busy: false, autoTried: false, hist: [] };
+const UPD = {
+  info: null, dl: null, busy: false, autoTried: false, hist: [],
+  /* 正在/刚刚结束的下载会话。界面随时可能被整块重绘，状态留在这儿才画得回来（审计 P1） */
+  dlUi: null, dlSeq: 0,
+  /* 检测去重：连点「检测更新」只发一次请求，结果回来各自取用 */
+  checking: null
+};
 
 function fmtSize(n) {
   const b = Number(n) || 0;
   if (!b) return '';
+  /* 小于 1 MB 别再显示「0.0 MB」——更新包通常几十 MB 看不出来，但插件 / 资源这类
+     几千字节的文件也会走这个格式化（审计 P3）。 */
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
   const mb = b / 1048576;
   return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(1) + ' MB';
+}
+/* 底层错误文案（fetch failed / ETIMEDOUT / 证书错误）对普通用户没有意义，
+   翻成人话；原文案另起一行「技术细节」，反馈问题时还能对照（审计 P2）。 */
+function updErrText(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '未知错误';
+  if (/fetch failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|network error/i.test(s)) {
+    return '网络连接失败（更新源暂时不可用）';
+  }
+  if (/ETIMEDOUT|timed? ?out|超时/i.test(s)) return '连接更新源超时';
+  if (/certificate|CERT_|self.signed|TLS|SSL/i.test(s)) return '与更新源建立安全连接失败';
+  if (/rate limit|403/i.test(s)) return '更新源暂时拒绝了请求（可能访问太频繁）';
+  if (/404|not found/i.test(s)) return '更新源上没有找到版本信息（发布页可能被改动）';
+  return s;
 }
 function fmtTime(ts) {
   if (!ts) return '—';
@@ -9246,8 +9271,11 @@ function renderUpdateResult(info) {
   if (!info) { box.innerHTML = ''; setUpdState('', '尚未检测'); return; }
   if (info.ok === false) {
     setUpdState('err', '检测失败');
-    box.innerHTML = '<div class="upd-box"><b>检测更新失败</b><p>' + esc(info.error || '未知错误') +
-      '</p><p>可以点「打开下载页」手动查看最新版本。更新源为 GitHub Releases（优先）与官方下载页（备用），' +
+    const raw = String(info.error || '');
+    const nice = updErrText(raw);
+    box.innerHTML = '<div class="upd-box"><b>检测更新失败</b><p>' + esc(nice) + '</p>' +
+      (raw && nice !== raw ? '<p style="opacity:.62">技术细节：' + esc(raw) + '</p>' : '') +
+      '<p>可以点「打开下载页」手动查看最新版本。更新源为 GitHub Releases（优先）与官方下载页（备用），' +
       (info.locked
         ? '本次请求用的是非官方地址，已被启动器拒绝。'
         : '两条通道都暂时连不上，可能是网络不通，稍后再试。') +
@@ -9275,7 +9303,8 @@ function renderUpdateResult(info) {
   const dls = Array.isArray(info.downloads) ? info.downloads : [];
   let html = '<div class="upd-box new"><b>发现新版本 ' + esc(info.latest) + '（当前 ' + esc(info.current) + '）</b>' +
     '<p>可以直接在启动器内下载新版本，也可以让浏览器下载；装好后启动器就是新版了。' +
-    (info.via ? '更新来源：' + esc(info.via) + '。' : '') + '</p>';
+    (info.via ? '更新来源：' + esc(info.via) + '。' : '') +
+    (info.dlViaOfficial ? '这一版是正式版，下载会<b>先走官网</b>，官网不通再自动改用 GitHub。' : '') + '</p>';
   if (info.notes) html += '<div class="upd-notes">' + esc(info.notes) + '</div>';
   if (dls.length) {
     html += dls.map((d, i) => {
@@ -9293,7 +9322,7 @@ function renderUpdateResult(info) {
     html += '<p>更新源没有给出可识别的下载直链，请点「打开下载页」手动下载。</p>';
   }
   html += '<div class="btn-row" style="margin-top:12px"><button class="btn ghost" id="btnUpdIgnore">' +
-    '<svg class="ic sm"><use href="#i-x"/></svg> 跳过此版本</button></div><div id="updDlBox"></div></div>';
+    '<svg class="ic sm"><use href="#i-x"/></svg> 跳过此版本</button></div></div>';
   box.innerHTML = html;
   $$('#updResult [data-upd-browser]').forEach(b => b.addEventListener('click', () => {
     const d = dls[parseInt(b.dataset.updBrowser, 10)];
@@ -9305,11 +9334,15 @@ function renderUpdateResult(info) {
   }));
   const ig = $('#btnUpdIgnore');
   if (ig) ig.addEventListener('click', async () => {
+    /* 跳过会清空下载区；下载还在跑时清掉就没人能取消了，先拦住 */
+    if (UPD.busy) { toast('下载进行中，先取消或等它下完再跳过', 'warn'); return; }
     const r = await window.lmc.updateIgnore({ version: info.latest });
     if (r && r.config) S.config = r.config;
     UPD.info = null;
+    UPD.dl = null; UPD.dlUi = null;   /* 这一版已经跳过，别让旧下载会话在下次重绘时被补画回来 */
     setUpdState('', '已跳过 ' + info.latest);
-    $('#updDlBox').innerHTML = '';
+    const db = $('#updDlBox');
+    if (db) { db.innerHTML = ''; delete db.dataset.updSession; }
     toast('已跳过版本 ' + info.latest + '，之后不再提示');
   });
 }
@@ -9362,7 +9395,7 @@ function renderUpdateHistory(info) {
     '<span class="v">' + esc(h.version) + '</span>' +
     (h.pre ? '<span class="tag pre">快照 / 预发布</span>' : '<span class="tag rel">正式版</span>') +
     '<span class="sp"></span>' + rowBtns(h, '回退') + '</div>').join('');
-  html += '<div id="updHistDl"></div></div>';
+  html += '</div>';
   box.innerHTML = html;
   $$('#updHistory [data-hv]').forEach(b => b.addEventListener('click', () => {
     const h = UPD.hist.find(x => x.version === b.dataset.hv);
@@ -9373,10 +9406,72 @@ function renderUpdateHistory(info) {
     toast('开始下载 ' + h.version + ' 的便携版 exe，下载完点「替换并重启」即可回退');
   }));
 }
+/* ---------------- 下载区：状态与 DOM 解耦 ----------------
+   #updDlBox（更新流程）/ #updHistDl（回退流程）都是 index.html 里的固定容器，
+   结果区 / 回退区怎么整块重绘都碰不到它们。UPD.dlUi 再记一份「画什么」，
+   容器万一被清空，下一条进度事件就能照原样补画回来（审计 P1）。 */
+function updDlHostEl() {
+  const ui = UPD.dlUi;
+  const sel = (ui && ui.hostSel) || '#updDlBox';
+  return $(sel) || $('#updDlBox') || $('#updHistDl');
+}
+function updDlText() {
+  const ui = UPD.dlUi;
+  if (!ui) return '';
+  const nm = ui.name || '更新包';
+  if (ui.phase === 'downloading') {
+    /* 速度取全局下载速率（netTick 推的 install:speed），更新包下载同样有真实速度可看 */
+    const sp = fmtSpeed(dlTask.bps);
+    return '正在下载 ' + nm + ' · ' + (ui.pct >= 0 ? ui.pct + '%' : '连接中') +
+      (ui.total ? '（' + fmtSize(ui.got) + ' / ' + fmtSize(ui.total) + '）' : '') +
+      (sp ? ' · ↓ ' + sp : '');
+  }
+  if (ui.phase === 'retry') return '官网下载没成功，正在改用 GitHub 下载…';
+  if (ui.phase === 'cancelled') return '已取消下载';
+  if (ui.phase === 'start') return '开始下载 ' + nm + '…';
+  return '准备下载 ' + nm + '…';
+}
+function updDlPaint(force) {
+  const ui = UPD.dlUi;
+  if (!ui) return;
+  const host = updDlHostEl();
+  if (!host) return;                 /* 面板暂时不在：状态留着，下次重绘时再画 */
+  const mark = String(ui.id);
+  if (ui.phase === 'done' && ui.result) {
+    if (force || host.dataset.updSession !== mark) renderUpdateDownloaded(ui.result, host, ui.opts);
+    host.dataset.updSession = mark;
+    return;
+  }
+  if (ui.phase === 'error') {
+    if (force || host.dataset.updSession !== mark) {
+      host.innerHTML = '<span class="upd-bar-tx">下载未完成：' + esc(ui.err || '未知错误') + '</span>';
+      host.dataset.updSession = mark;
+    }
+    return;
+  }
+  /* 进行中：结构不在（刚换容器 / 被清空）就重建，其余只刷新数值 —— 别每条进度都重建 DOM */
+  if (force || host.dataset.updSession !== mark || !host.querySelector('#updBarTx')) {
+    host.innerHTML = '<div class="upd-bar"><i id="updBarI"></i></div>' +
+      '<span class="upd-bar-tx" id="updBarTx"></span>' +
+      '<div class="btn-row" style="margin-top:10px"><button class="btn ghost" id="btnUpdDlCancel">' +
+      '<svg class="ic sm"><use href="#i-x"/></svg> 取消下载</button></div>';
+    host.dataset.updSession = mark;
+    const cb = host.querySelector('#btnUpdDlCancel');
+    if (cb) cb.addEventListener('click', async () => {
+      const r = await window.lmc.updateCancel();
+      if (!r.ok) toast(r.error || '无法取消', 'warn');
+    });
+  }
+  const bar = host.querySelector('#updBarI'), tx = host.querySelector('#updBarTx');
+  if (bar) bar.style.width = Math.max(0, Math.min(100, Number(ui.pct) || 0)) + '%';
+  if (tx) tx.textContent = updDlText();
+}
 /* 已下载完成：展示路径与后续操作。
    host：把进度/结果画到哪个容器 —— 更新流程用 #updDlBox，回退流程用 #updHistDl
    opts.mode==='revert' 时是回退：拿到的是免安装便携版 exe，操作是「替换并重启」
-   （覆盖当前程序文件再打开），不给「运行安装包」—— 回退不需要安装 */
+   （覆盖当前程序文件再打开），不给「运行安装包」—— 回退不需要安装。
+   节点一律从传进来的 box 里找：重绘竞态下全局 $() 可能拿到 null，抛异常会让
+   后面的按钮全丢（审计 P1）。 */
 function renderUpdateDownloaded(r, host, opts) {
   const box = host || $('#updDlBox') || $('#updHistDl');
   if (!box) return;
@@ -9392,8 +9487,9 @@ function renderUpdateDownloaded(r, host, opts) {
       '<button class="btn ghost" id="btnUpdReveal"><svg class="ic sm"><use href="#i-folder"/></svg> 打开所在文件夹</button>' +
       '</div><p class="upd-bar-tx">点「替换并重启」会关闭启动器、用这个 exe 覆盖当前的程序文件，然后自动打开旧版本。' +
       '<b>不需要安装向导</b>，游戏目录、存档、设置与账户都不会动。</p>';
-    $('#btnUpdReveal').addEventListener('click', () => window.lmc.updateReveal({ path: r.path }));
-    $('#btnUpdSwap').addEventListener('click', async () => {
+    const rv = box.querySelector('#btnUpdReveal'), sw = box.querySelector('#btnUpdSwap');
+    if (rv) rv.addEventListener('click', () => window.lmc.updateReveal({ path: r.path }));
+    if (sw) sw.addEventListener('click', async () => {
       const rr = await window.lmc.updateSelfReplace({ path: r.path, sha256: r.sha256 || '' });
       if (!rr.ok) { toast('自动替换失败：' + rr.error, 'error'); return; }
       setUpdState('busy', '正在重启并回退…');
@@ -9411,13 +9507,15 @@ function renderUpdateDownloaded(r, host, opts) {
     '</div><p class="upd-bar-tx">' + (portable
       ? '「一键更新并重启」会关闭启动器、用新版本覆盖当前的便携版文件，然后自动重新打开。'
       : '运行安装包即可更新到新版本（安装向导会保留你的游戏目录与设置）。') + '</p>';
-  $('#btnUpdRun').addEventListener('click', async () => {
+  const run = box.querySelector('#btnUpdRun');
+  const rv2 = box.querySelector('#btnUpdReveal');
+  const sb = box.querySelector('#btnUpdSelf');
+  if (run) run.addEventListener('click', async () => {
     const rr = await window.lmc.updateRun({ path: r.path });
     if (!rr.ok) toast('无法运行安装包：' + rr.error, 'error');
     else toast('已启动安装程序，按提示完成更新即可');
   });
-  $('#btnUpdReveal').addEventListener('click', () => window.lmc.updateReveal({ path: r.path }));
-  const sb = $('#btnUpdSelf');
+  if (rv2) rv2.addEventListener('click', () => window.lmc.updateReveal({ path: r.path }));
   if (sb) sb.addEventListener('click', async () => {
     const rr = await window.lmc.updateSelfReplace({ path: r.path, sha256: r.sha256 || '' });
     if (!rr.ok) { toast('自动更新失败：' + rr.error, 'error'); return; }
@@ -9434,49 +9532,61 @@ async function startUpdateDownload(d, hostSel, opts) {
   if (!d || !d.url) { toast('下载地址缺失', 'error'); return; }
   const revert = !!(opts && opts.mode === 'revert');
   UPD.busy = true;
-  const box = $(hostSel || '#updDlBox') || $('#updDlBox') || $('#updHistDl');
-  const other = (hostSel === '#updHistDl') ? $('#updDlBox') : $('#updHistDl');
-  if (other) other.innerHTML = '';   /* 同一时间只在一个地方显示下载进度 */
-  if (box) {
-    box.innerHTML = '<div class="upd-bar"><i id="updBarI"></i></div>' +
-      '<span class="upd-bar-tx" id="updBarTx">准备下载 ' + esc(d.name) + '…</span>' +
-      '<div class="btn-row" style="margin-top:10px"><button class="btn ghost" id="btnUpdDlCancel">' +
-      '<svg class="ic sm"><use href="#i-x"/></svg> 取消下载</button></div>';
-    const cb = $('#btnUpdDlCancel');
-    if (cb) cb.addEventListener('click', async () => {
-      const r = await window.lmc.updateCancel();
-      if (!r.ok) toast(r.error || '无法取消', 'warn');
-    });
+  const sel = hostSel || '#updDlBox';
+  UPD.dlUi = {
+    id: (UPD.dlSeq = (UPD.dlSeq || 0) + 1),
+    hostSel: sel, opts: opts || {}, name: d.name || '更新包',
+    phase: 'start', pct: 0, got: 0, total: 0, result: null, err: ''
+  };
+  const other = $((sel === '#updHistDl') ? '#updDlBox' : '#updHistDl');
+  if (other) {   /* 同一时间只在一个地方显示下载进度 */
+    other.innerHTML = '';
+    delete other.dataset.updSession;
   }
+  updDlPaint(true);
   let r;
-  try { r = await window.lmc.updateDownload({ url: d.url, name: d.name, sha256: d.sha256 || '' }); }
+  /* 正式版：官网优先、GitHub 兜底 —— alt 里是备用直链，主进程逐条试，全失败才算真失败 */
+  try { r = await window.lmc.updateDownload({ url: d.url, alt: d.alt || [], name: d.name, sha256: d.sha256 || '' }); }
   catch (e) { r = { ok: false, error: e.message || String(e) }; }
   UPD.busy = false;
   if (!r.ok) {
-    if (box) box.innerHTML = '<span class="upd-bar-tx">下载未完成：' + esc(r.error || '未知错误') + '</span>';
+    UPD.dlUi.phase = 'error';
+    UPD.dlUi.err = r.error || '未知错误';
+    updDlPaint(true);
     toast((revert ? '旧版本下载失败：' : '更新包下载失败：') + (r.error || '未知错误'), 'error');
     return;
   }
   UPD.dl = r;
-  renderUpdateDownloaded(r, box, opts);
+  UPD.dlUi.phase = 'done';
+  UPD.dlUi.result = r;
+  updDlPaint(true);
   toast(revert ? (opts.version ? '已下载 ' + opts.version + ' 的便携版 exe，点「替换并重启」即可回退' : '旧版本已下载完成，点「替换并重启」即可回退') : '更新包已下载完成');
 }
 /* 一次检测结果的统一出口：结果区 + 版本回退区一起刷（两处都在用同一份 info） */
 function applyUpdateInfo(info) {
   UPD.info = info || null;
+  /* 下载进行中绝不动结果区 / 回退区：整块重绘会把「发现新版本」改写成「已是最新」，
+     跟用户刚点的操作对不上（下载区已经独立，但文案同样不能乱改，审计 P1 路径 2）。
+     结果先存着，下载结束后下一次重绘自然用上。 */
+  if (UPD.busy) return;
   renderUpdateResult(info);
   renderUpdateHistory(info);
+  updDlPaint();   /* 已结束的下载会话跟着重绘没了就补画回来 */
 }
 async function checkUpdateNow(silent) {
   if (UPD.busy) { toast('下载进行中，请稍后再检测', 'warn'); return null; }
+  if (UPD.checking) return UPD.checking;   /* 连点两次只发一次请求（审计 P1 建议） */
   setUpdState('busy', '正在检测…');
   const box = $('#updResult');
   if (box && !silent) box.innerHTML = '<div class="empty-sm">正在检测更新…</div>';
-  let info;
-  try { info = await window.lmc.updateCheck({}); }
-  catch (e) { info = { ok: false, error: e.message || String(e) }; }
-  applyUpdateInfo(info);
-  return info;
+  UPD.checking = (async () => {
+    let info;
+    try { info = await window.lmc.updateCheck({}); }
+    catch (e) { info = { ok: false, error: e.message || String(e) }; }
+    applyUpdateInfo(info);
+    return info;
+  })();
+  try { return await UPD.checking; } finally { UPD.checking = null; }
 }
 /* 进入设置页时展示更新状态：有缓存直接用；没有则静默检测一次（每次启动仅一次） */
 async function refreshUpdatePane() {
@@ -9493,25 +9603,31 @@ window.lmc.on('update:available', (info) => {
   applyUpdateInfo(info);
   toast('发现新版本 ' + info.latest + '，可在「设置 → 版本更新」里更新', 'warn');
 });
-/* 下载进度推送 */
+/* 下载进度推送：只更新 UPD.dlUi，再由 updDlPaint 落到当前容器上 ——
+   容器被重绘 / 换页都不影响，进度不会「丢」在半路（审计 P1）。 */
 window.lmc.on('update:progress', (d) => {
   if (!d) return;
-  const bar = $('#updBarI'), tx = $('#updBarTx');
+  const ui = UPD.dlUi;
+  if (!ui || ui.phase === 'done' || ui.phase === 'error') return;
   if (d.phase === 'start') {
-    if (tx) tx.textContent = '开始下载 ' + d.name + '…';
+    ui.phase = 'start';
+    if (d.name) ui.name = d.name;
   } else if (d.phase === 'downloading') {
-    const pct = d.pct >= 0 ? d.pct : 0;
-    if (bar) bar.style.width = pct + '%';
-    /* 速度取全局下载速率（netTick 推的 install:speed），更新包下载同样有真实速度可看 */
-    const sp = fmtSpeed(dlTask.bps);
-    if (tx) {
-      tx.textContent = '正在下载 ' + d.name + ' · ' + (d.pct >= 0 ? d.pct + '%' : '连接中') +
-        (d.total ? '（' + fmtSize(d.got) + ' / ' + fmtSize(d.total) + '）' : '') +
-        (sp ? ' · ↓ ' + sp : '');
-    }
-  } else if (d.phase === 'cancelled' && tx) {
-    tx.textContent = '已取消下载';
+    ui.phase = 'downloading';
+    /* 主进程在「还没拿到总大小」时给 -1：保留下来，文案才会说「连接中」而不是 0% */
+    ui.pct = (typeof d.pct === 'number') ? d.pct : 0;
+    ui.got = d.got || 0;
+    ui.total = d.total || 0;
+  } else if (d.phase === 'retry') {
+    /* 官网没下下来、正在换 GitHub 附件重试：说清楚，别让用户以为卡住了 */
+    ui.phase = 'retry';
+    ui.pct = 0;
+  } else if (d.phase === 'cancelled') {
+    ui.phase = 'cancelled';
+  } else {
+    return;
   }
+  updDlPaint();
 });
 
 /* ---------------- 更新公告（随版本内置） ----------------

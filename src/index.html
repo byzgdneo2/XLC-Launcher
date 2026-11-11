@@ -1544,7 +1544,12 @@
             <button class="btn ghost" id="btnUpdOpenPage"><svg class="ic sm"><use href="#i-external"/></svg> 打开下载页</button>
           </div>
           <div id="updResult"></div>
+          <!-- 下载区是独立容器，**不能**塞回 #updResult / #updHistory 的模板里：
+               这两个区随时会整块 innerHTML 重绘（切页回来、后台检测晚到），
+               以前进度条与「取消下载」就跟着一起被清掉，下载还在后台跑却没人能取消。 -->
+          <div id="updDlBox"></div>
           <div id="updHistory"></div>
+          <div id="updHistDl"></div>
         </div>
 
         <div class="card set-card">
