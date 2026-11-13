@@ -1636,9 +1636,18 @@
   <div class="modal-mask" id="modalMask" style="display:none">
     <div class="modal" id="modalBox"></div>
   </div>
-  <!-- 模组版本选择弹窗（装 MOD 前先选装哪个版本；与游戏安装弹窗分开，互不打架） -->
-  <div class="modal-mask" id="mvMask" style="display:none">
-    <div class="modal" id="mvBox"></div>
+  <!-- 模组详情页（PCL 式）：项目卡 / 游戏版本条 / 前置资源 / 版本列表 —— 装 MOD 前先在这里选版本。
+       整页盖在内容区上（标题栏与状态栏仍可用），点左上角返回上一层 / 关闭。 -->
+  <div class="mvpage" id="mvPage" style="display:none">
+    <div class="mvp-head">
+      <button class="mvp-back" id="mvBack" title="返回"><svg class="ic"><use href="#i-chev-d"/></svg></button>
+      <div class="mvp-headtx">
+        <div class="mvp-title" id="mvTitle">模组</div>
+        <div class="mvp-sub" id="mvSub">正在读取…</div>
+      </div>
+      <button class="mvp-close" id="mvClose" title="关闭"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="mvp-body" id="mvBody"></div>
   </div>
 
   <div id="toasts"></div>

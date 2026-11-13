@@ -1634,13 +1634,22 @@ function verRow(v, pinTag, pinCls) {
     '<div class="v-date">' + fmtDate(v.releaseTime) + '</div>' +
     '<div class="v-act"></div>');
   const act = row.querySelector('.v-act');
+  /* 「详情」= 中文 Minecraft Wiki 的该版本页面（MOD 行同一个位置也有个详情，保持一致的形状）。
+     只跳外链，不弹本站弹窗 —— 版本改了什么、加了哪些方块，维基写得比我们全。 */
+  const wiki = window.lmc.modver.mcWikiUrl(v);
+  const detail = el('button', 'btn ghost', '详情');
+  detail.title = '在中文 Minecraft Wiki 查看「' + (v.id || '') + '」的更新内容';
+  if (wiki) detail.dataset.wiki = wiki;
+  detail.addEventListener('click', () => { if (wiki) window.lmc.openUrl(wiki); });
   if (installed) {
     act.innerHTML = '<span class="ok-tag"><svg class="ic sm"><use href="#i-check"/></svg>已安装</span>';
+    act.appendChild(detail);
     const re = el('button', 'btn ghost', '<svg class="ic sm"><use href="#i-refresh"/></svg> 再装一份');
     re.title = '重新下载安装（可修复损坏的实例）或以自定义名称再装一份';
     re.addEventListener('click', () => openInstallModal(v, true));
     act.appendChild(re);
   } else {
+    act.appendChild(detail);
     const btn = el('button', 'btn primary', '<svg class="ic sm"><use href="#i-download"/></svg> 安装');
     btn.addEventListener('click', () => openInstallModal(v));
     act.appendChild(btn);
@@ -2560,81 +2569,313 @@ async function pingSources(autoPick) {
     }
   }
 }
-/* ---------------- 模组版本选择：装 MOD 前先选装哪个版本 ---------------- */
-const mvMask = $('#mvMask'), mvBox = $('#mvBox');
-let mvToken = 0;                                       /* 每次打开自增：慢请求回来时别覆盖新弹窗 */
-function closeModVerPicker() {
-  if (!mvMask || mvMask.style.display === 'none') return;
-  mvMask.style.display = 'none';
+/* ---------------- 模组详情页（PCL 式）：项目卡 / 游戏版本条 / 前置资源 / 版本列表 ----------------
+   旧版是个 560px 的小弹窗：一排加载器分类 + 一列「版本号 [安装]」。这一版照 PCL 的模组页
+   整页重做 —— 装 MOD 之前该看到的四件事：这是什么 MOD、它支持哪些游戏版本、这个版本要哪些
+   前置、有哪些文件可以装。点前置资源能钻进前置自己的页面（前置的前置继续往上叠），返回键退回来。 */
+const MV = window.lmc.modver;                  /* 纯函数：游戏版本排序 / 分组 / 依赖解析（src/modver-core.js） */
+const mvPageEl = $('#mvPage');
+let mvToken = 0;                               /* 每次加载自增：慢请求回来时别覆盖新页面 */
+let mvState = null;                            /* { project, versions, depMap, source, depsKnown } */
+const MV_STACK = [];                           /* 面包屑栈：[{ id, source, title }] */
+const MV_INSTALLED = new Set();                /* 本次页面存活期里装过的项目 id（前置卡片上打勾） */
+const MV_CTX = { onPick: null, preferLoader: '', gv: '__all__', collapsed: new Set() };
+const MV_MAX_ROWS = 40;
+
+/* ---- 相对时间 / 下载量：PCL 那种「14 小时前」「33 万」 ---- */
+function mvAgo(iso) {
+  const t = Date.parse(iso || '');
+  if (!t) return '';
+  const d = Date.now() - t;
+  if (d < 0) return fmtDate(iso);
+  if (d < 60000) return '刚刚';
+  if (d < 3600000) return Math.floor(d / 60000) + ' 分钟前';
+  if (d < 86400000) return Math.floor(d / 3600000) + ' 小时前';
+  if (d < 2592000000) return Math.floor(d / 86400000) + ' 天前';
+  return fmtDate(iso);
+}
+function mvCount(n) {
+  const x = Number(n) || 0;
+  if (x >= 1e8) return (x / 1e8).toFixed(1).replace(/\.0$/, '') + ' 亿';
+  if (x >= 1e4) return Math.round(x / 1e4) + ' 万';
+  return String(x);
+}
+function mvIcon(url, cls) {
+  return url
+    ? '<img class="' + cls + '" src="' + esc(url) + '" alt="" loading="lazy">'
+    : '<div class="' + cls + ' mvp-ico-ph"><svg class="ic sm"><use href="#i-puzzle"/></svg></div>';
+}
+
+function closeModPage() {
+  if (!mvPageEl || mvPageEl.style.display === 'none') return;
+  mvPageEl.style.display = 'none';
+  MV_STACK.length = 0;
+  MV_INSTALLED.clear();
+  mvState = null;
+  MV_CTX.onPick = null;
   mvToken++;
 }
-if (mvMask) mvMask.addEventListener('click', e => { if (e.target === mvMask) closeModVerPicker(); });
-/* 弹出版本列表；顶部按钮按**模组加载器**分类（Fabric / NeoForge / Forge …，不是游戏版本）。
-   选定后走 onPick(version)。列表来自 Modrinth / CurseForge 的真实文件记录。
-   preferLoader：目标实例的加载器，命中就默认选中那个按钮。 */
-async function openModVerPicker(h, source, onPick, preferLoader) {
-  if (!mvMask || !mvBox) return;
+
+/* ---- 项目卡：图标 / 名称 / 分类 / 简介 / 下载量 / 更新时间 / 来源 ---- */
+function mvHeroHtml() {
+  const p = mvState.project;
+  const src = mvState.source === 'curseforge' ? 'CurseForge' : 'Modrinth';
+  return '<div class="card mvp-hero">' +
+    mvIcon(p.icon, 'mvp-hero-ic') +
+    '<div class="mvp-hero-main">' +
+      '<div class="mvp-hero-t"><h3>' + esc(p.title) + '</h3>' +
+        (p.slug ? '<span class="mvp-slug">' + esc(p.slug) + '</span>' : '') + '</div>' +
+      (p.tags && p.tags.length
+        ? '<div class="mvp-tags">' + p.tags.map(t => '<span>' + esc(MV.catLabel(t)) + '</span>').join('') + '</div>'
+        : '') +
+      (p.desc ? '<p class="mvp-desc">' + esc(p.desc) + '</p>' : '') +
+      '<div class="mvp-meta">' +
+        '<span><svg class="ic sm"><use href="#i-download"/></svg>' + mvCount(p.downloads) + ' 次下载</span>' +
+        (p.updated ? '<span><svg class="ic sm"><use href="#i-clock"/></svg>更新于 ' + mvAgo(p.updated) + '</span>' : '') +
+        '<span><svg class="ic sm"><use href="#i-box"/></svg>' + mvState.versions.length + ' 个版本</span>' +
+        '<span class="mvp-src">' + src + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<div class="mvp-hero-act">' +
+      '<button class="btn ghost" id="mvOpenSite"><svg class="ic sm"><use href="#i-external"/></svg> 打开项目页</button>' +
+      '<button class="btn ghost" id="mvCopyName"><svg class="ic sm"><use href="#i-list"/></svg> 复制名称</button>' +
+    '</div>' +
+  '</div>';
+}
+
+/* ---- 游戏版本条：全部 + 每个版本 + 该版本有几个文件（新的在前） ---- */
+function mvTabsHtml() {
+  const tabs = MV.collectGameVersions(mvState.versions);
+  return '<div class="card mvp-tabcard"><div class="mvp-tabs">' +
+    '<button class="mvp-tab' + (MV_CTX.gv === '__all__' ? ' on' : '') + '" data-gv="__all__">全部<i>' +
+      mvState.versions.length + '</i></button>' +
+    tabs.map(t => '<button class="mvp-tab' + (MV_CTX.gv === t.name ? ' on' : '') + '" data-gv="' + esc(t.name) + '">' +
+      esc(t.name) + '<i>' + t.count + '</i></button>').join('') +
+  '</div></div>';
+}
+
+/* ---- 前置资源：点进去就是它的页面（和 PCL 里点前置同名） ---- */
+function mvDepHtml(d) {
+  const done = MV_INSTALLED.has(d.id);
+  const src = d.source === 'curseforge' ? 'CurseForge' : 'Modrinth';
+  return '<button class="mvp-dep" data-pid="' + esc(d.id) + '"' + (d.source ? ' data-src="' + esc(d.source) + '"' : '') + '>' +
+    mvIcon(d.icon, 'mvp-dep-ic') +
+    '<div class="mvp-dep-main">' +
+      '<div class="mvp-dep-t">' + esc(d.title || d.id) +
+        (done ? '<span class="mvp-ok"><svg class="ic sm"><use href="#i-check"/></svg>已装</span>' : '') + '</div>' +
+      (d.tags && d.tags.length
+        ? '<div class="mvp-dep-tags">' + d.tags.map(t => '<span>' + esc(MV.catLabel(t)) + '</span>').join('') + '</div>'
+        : '') +
+      (d.desc ? '<div class="mvp-dep-d">' + esc(d.desc) + '</div>' : '') +
+      '<div class="mvp-dep-m">' +
+        '<span>↓ ' + mvCount(d.downloads) + '</span>' +
+        (d.updated ? '<span>更新于 ' + mvAgo(d.updated) + '</span>' : '') +
+        '<span class="mvp-src">' + src + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<span class="mvp-dep-go"><svg class="ic sm"><use href="#i-chev-d"/></svg></span>' +
+  '</button>';
+}
+
+/* ---- 版本行：版本号 + 加载器 / 前置数 / 大小 / 下载次数 / 更新时间 + 文件名 ---- */
+function mvRowHtml(v, gi) {
+  const n = MV.needCount(v);
+  const meta = [];
+  if (v.loaders && v.loaders.length) meta.push(esc(v.loaders.join(' / ')));
+  meta.push(n ? '<b class="mvp-need">' + n + ' 项前置</b>' : '无前置');
+  if (v.size) meta.push(fmtSizeB(v.size));
+  if (v.downloads) meta.push('下载 ' + mvCount(v.downloads) + ' 次');
+  if (v.date) meta.push('更新于 ' + mvAgo(v.date));
+  return '<div class="mvp-row" data-ref="' + esc(v.ref) + '" data-gv="' + esc((v.gv || []).join(',')) + '">' +
+    mvIcon(mvState.project.icon, 'mvp-row-ic') +
+    '<div class="mvp-row-main">' +
+      '<div class="mvp-row-n">' + esc(v.name || v.ref) + '</div>' +
+      '<div class="mvp-row-m">' + meta.join('<span class="mvp-dot">·</span>') + '</div>' +
+      (v.filename ? '<div class="mvp-row-f">' + esc(v.filename) + '</div>' : '') +
+    '</div>' +
+    '<button class="btn primary mvp-inst" data-g="' + gi + '" data-ref="' + esc(v.ref) + '">安装</button>' +
+  '</div>';
+}
+
+/* ---- 一组（一个加载器）= 前置资源 + 版本列表 ---- */
+function mvGroupHtml(g, gi) {
+  const collapsed = MV_CTX.collapsed.has(g.loader);
+  const depIds = [];
+  for (const v of g.versions) {
+    for (const pid of MV.depsOf(v)) if (depIds.indexOf(pid) < 0) depIds.push(pid);
+  }
+  const deps = depIds.map(pid => mvState.depMap[pid] ||
+    { id: pid, title: pid, desc: '', tags: [], downloads: 0, updated: '', source: mvState.source, missing: true });
+  const gvLabel = MV_CTX.gv === '__all__' ? '全部版本' : MV_CTX.gv + '（所选版本）';
+  const shown = g.versions.slice(0, MV_MAX_ROWS);
+
+  let depBlock;
+  if (deps.length) {
+    depBlock = '<div class="mvp-sec"><span>前置资源</span><i>' + deps.length + '</i></div>' +
+      '<div class="mvp-deps">' + deps.map(mvDepHtml).join('') + '</div>';
+  } else if (mvState.depsKnown) {
+    depBlock = '<div class="mvp-sec"><span>前置资源</span><i>0</i></div>' +
+      '<div class="mvp-nodep">这个版本没有必需的前置，装完就能用</div>';
+  } else {
+    depBlock = '<div class="mvp-sec"><span>前置资源</span></div>' +
+      '<div class="mvp-nodep">没取到这个项目的依赖信息，装之前先到项目页确认一下</div>';
+  }
+
+  return '<div class="card mvp-group' + (collapsed ? ' collapsed' : '') + '">' +
+    '<button class="mvp-gh" data-ld="' + esc(g.loader) + '">' +
+      '<span class="mvp-gh-l">' + esc(g.loader) + '</span>' +
+      '<span class="mvp-gh-s">' + esc(gvLabel) + '</span>' +
+      '<span class="mvp-gh-n">' + g.versions.length + ' 个版本</span>' +
+      '<svg class="ic sm mvp-chev"><use href="#i-chev-d"/></svg>' +
+    '</button>' +
+    '<div class="mvp-gbody">' + depBlock +
+      '<div class="mvp-sec"><span>版本列表</span><i>' + g.versions.length + '</i></div>' +
+      '<div class="mvp-rows">' + shown.map(v => mvRowHtml(v, gi)).join('') + '</div>' +
+      (g.versions.length > shown.length
+        ? '<div class="mvp-more">共 ' + g.versions.length + ' 个，只列最新 ' + shown.length + ' 个</div>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function mvRender() {
+  const body = $('#mvBody');
+  if (!body || !mvState) return;
+  const keep = body.scrollTop;
+  const vers = MV.filterByGame(mvState.versions, MV_CTX.gv);
+  let groups = MV.groupByLoader(vers);
+  /* 目标实例的加载器排最前面：装进 Fabric 实例的人不用先划过 NeoForge */
+  const want = String(MV_CTX.preferLoader || '').toLowerCase();
+  if (want) {
+    const hit = groups.filter(g => g.loader.toLowerCase() === want);
+    groups = hit.concat(groups.filter(g => g.loader.toLowerCase() !== want));
+  }
+  body.innerHTML = mvHeroHtml() + mvTabsHtml() +
+    (groups.length
+      ? groups.map((g, i) => mvGroupHtml(g, i)).join('')
+      : '<div class="card mvp-empty">这个游戏版本下还没有文件 —— 换一个版本标签看看</div>');
+  body.scrollTop = keep;
+
+  /* 图标挂了就藏起来（别给用户看破图），文字信息不受影响 */
+  body.querySelectorAll('img').forEach(img => img.addEventListener('error', () => { img.style.visibility = 'hidden'; }));
+
+  body.querySelectorAll('.mvp-tab').forEach(b => b.addEventListener('click', () => {
+    if (MV_CTX.gv === b.dataset.gv) return;
+    MV_CTX.gv = b.dataset.gv;
+    mvRender();
+  }));
+  body.querySelectorAll('.mvp-gh').forEach(b => b.addEventListener('click', () => {
+    const ld = b.dataset.ld;
+    if (MV_CTX.collapsed.has(ld)) MV_CTX.collapsed.delete(ld); else MV_CTX.collapsed.add(ld);
+    mvRender();
+  }));
+  body.querySelectorAll('.mvp-dep').forEach(b => b.addEventListener('click', () => mvDrill(b.dataset.pid)));
+  body.querySelectorAll('.mvp-inst').forEach(b => b.addEventListener('click', () => {
+    const v = mvState.versions.find(x => String(x.ref) === b.dataset.ref);
+    if (v) mvInstall(v, b);
+  }));
+  const site = $('#mvOpenSite');
+  if (site) site.addEventListener('click', () => { if (mvState.project.url) window.lmc.openUrl(mvState.project.url).catch(() => {}); });
+  const copy = $('#mvCopyName');
+  if (copy) copy.addEventListener('click', () => {
+    window.lmc.copyText(mvState.project.title);
+    toast('已复制：' + mvState.project.title);
+  });
+}
+
+/* ---- 钻进前置的页面；同一层重复点自己就忽略（防止栈里绕圈） ---- */
+async function mvDrill(pid) {
+  if (!mvState || !pid) return;
+  if (MV_STACK.some(e => e.id === pid)) return;
+  const d = mvState.depMap[pid];
+  if (!d) { toast('这个前置的信息没取到，可以到项目页手动装', 'warn'); return; }
+  if (MV_STACK.length >= 5) { toast('前置套得太深了，先装眼前这个吧', 'warn'); return; }
+  MV_STACK.push({ id: d.id, source: d.source || 'modrinth', title: d.title || d.id });
+  await mvLoad(MV_STACK[MV_STACK.length - 1]);
+}
+
+async function mvLoad(entry) {
   const tk = ++mvToken;
-  mvBox.innerHTML =
-    '<h3><svg class="ic sm"><use href="#i-puzzle"/></svg> 选择模组版本</h3>' +
-    '<div class="mv-sub">' + esc(h.title || '') + ' —— 先选要安装的版本，再决定装到哪</div>' +
-    '<div class="mv-tabs" id="mvTabs" style="display:none"></div>' +
-    '<div class="mv-list" id="mvList"><div class="empty-sm">正在获取版本列表…</div></div>' +
-    '<div class="mfoot"><button class="btn ghost" id="mvClose">关闭</button></div>';
-  mvMask.style.display = 'flex';
-  $('#mvClose').addEventListener('click', closeModVerPicker);
-  const r = await window.lmc.modrinthModVersions({ projectId: h.id, source }).catch(e => ({ ok: false, error: e.message }));
-  if (tk !== mvToken || mvMask.style.display === 'none') return;   /* 期间被关掉/换开了 */
-  const listEl = $('#mvList'), tabsEl = $('#mvTabs');
+  mvState = null;
+  MV_CTX.gv = '__all__';
+  MV_CTX.collapsed = new Set();
+  if (mvPageEl) mvPageEl.style.display = 'flex';
+  const parent = MV_STACK.length > 1 ? MV_STACK[MV_STACK.length - 2] : null;
+  $('#mvTitle').textContent = entry.title || '模组';
+  $('#mvSub').textContent = parent
+    ? '前置资源 · 装完会回到「' + (parent.title || '上一层') + '」'
+    : '先选要安装的版本，再决定装到哪';
+  $('#mvBack').title = parent ? '返回「' + (parent.title || '上一层') + '」' : '返回下载页';
+  const body = $('#mvBody');
+  body.innerHTML = '<div class="mvp-loading"><span class="mvp-spin"></span>正在读取项目信息…</div>';
+  body.scrollTop = 0;
+  const r = await window.lmc.modrinthModPage({ projectId: entry.id, source: entry.source })
+    .catch(e => ({ ok: false, error: e.message }));
+  if (tk !== mvToken) return;
   if (!r || !r.ok) {
-    listEl.innerHTML = '<div class="warnbar tip">获取版本列表失败：' + esc((r && r.error) || '网络异常') + '</div>';
+    body.innerHTML = '<div class="warnbar tip">读取失败：' + esc((r && r.error) || '网络异常') + '</div>' +
+      '<div class="mvp-retry"><button class="btn ghost" id="mvRetry">重试</button></div>';
+    const rt = $('#mvRetry');
+    if (rt) rt.addEventListener('click', () => mvLoad(entry));
     return;
   }
-  const all = r.versions || [];
-  if (!all.length) {
-    listEl.innerHTML = '<div class="warnbar tip">这个项目没有可下载的文件</div>';
+  mvState = {
+    project: r.project, versions: r.versions || [], depMap: r.depProjects || {},
+    source: r.source || entry.source, depsKnown: r.depsKnown !== false
+  };
+  entry.title = (r.project && r.project.title) || entry.title;
+  $('#mvTitle').textContent = entry.title;
+  mvRender();
+}
+
+function mvBack() {
+  if (!MV_STACK.length) return closeModPage();
+  if (MV_STACK.length > 1) {
+    MV_STACK.pop();
+    mvLoad(MV_STACK[MV_STACK.length - 1]);
+  } else {
+    closeModPage();
+  }
+}
+
+/* 装：根 MOD 交给调用方（它负责另存 / 装进实例），装完直接收页；
+   在前置页里装则装完退回上一层，并把那个前置标成「已装」。 */
+async function mvInstall(v, btn) {
+  const p = mvState.project;
+  const proj = { id: p.id, source: mvState.source, title: p.title };
+  const cb = MV_CTX.onPick;
+  if (!cb) return;
+  if (MV_STACK.length === 1) {
+    closeModPage();
+    cb(v, proj, btn);
     return;
   }
-  /* 加载器分类按钮：全部 + 列表里真实出现过的加载器（主进程已归一化，带数量） */
-  const chips = r.loaders || [];
-  const normLd = x => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
-  const pickable = ld => ld && ld !== '__all__'
-    ? all.filter(v => (v.loaders || []).some(n => normLd(n) === normLd(ld)))
-    : all.slice();
-  let cur = '__all__';
-  const want = normLd(preferLoader);
-  if (want && chips.some(c => normLd(c.name) === want)) cur = chips.find(c => normLd(c.name) === want).name;
-  const MAX_ROWS = 60;
-  function paint() {
-    if (chips.length) {
-      tabsEl.style.display = '';
-      tabsEl.innerHTML = '<button class="mv-tab' + (cur === '__all__' ? ' on' : '') + '" data-ld="__all__">全部 <span>' + all.length + '</span></button>' +
-        chips.map(c => '<button class="mv-tab' + (cur === c.name ? ' on' : '') + '" data-ld="' + esc(c.name) + '">' +
-          esc(c.name) + ' <span>' + c.count + '</span></button>').join('');
-      tabsEl.querySelectorAll('button.mv-tab').forEach(b => b.addEventListener('click', () => {
-        cur = b.dataset.ld;
-        paint();
-      }));
-    }
-    const list = pickable(cur);
-    const shown = list.slice(0, MAX_ROWS);
-    listEl.innerHTML = (shown.length ? shown.map((v, i) =>
-      '<div class="ver-row"><div class="v-name"><b>' + esc(v.name || v.ref) + '</b>' +
-      '<span class="res-meta">' + fmtDate(v.date) +
-      (v.filename ? ' · ' + esc(v.filename) : '') +
-      (v.loaders && v.loaders.length ? ' · ' + esc(v.loaders.join(' / ')) : '') +
-      (v.size ? ' · ' + (v.size / 1048576).toFixed(2) + ' MB' : '') +
-      '</span></div>' +
-      '<div class="v-act"><button class="btn primary mv-pick" data-i="' + i + '">安装</button></div></div>'
-    ).join('') : '<div class="empty-sm">这个加载器下没有可用的版本' + (chips.length ? ' —— 换一个加载器试试' : '') + '</div>')
-      + (list.length > shown.length ? '<div class="mv-more">共 ' + list.length + ' 个，只显示最近 ' + shown.length + ' 个</div>' : '');
-    listEl.querySelectorAll('button.mv-pick').forEach(b => b.addEventListener('click', () => {
-      const v = shown[+b.dataset.i];
-      closeModVerPicker();
-      onPick(v);
-    }));
+  const rr = await cb(v, proj, btn);
+  if (rr && rr.ok) {
+    MV_INSTALLED.add(proj.id);
+    MV_STACK.pop();
+    await mvLoad(MV_STACK[MV_STACK.length - 1]);
   }
-  paint();
+}
+
+/* 对外入口（名字沿用旧的，调用方不用改语义）：先弹页面，再按来源拉项目信息 */
+async function openModVerPicker(h, source, onPick, preferLoader) {
+  if (!mvPageEl) return;
+  MV_CTX.onPick = onPick || null;
+  MV_CTX.preferLoader = preferLoader || '';
+  MV_INSTALLED.clear();
+  MV_STACK.length = 0;
+  MV_STACK.push({ id: h.id, source: source || 'modrinth', title: h.title || '' });
+  await mvLoad(MV_STACK[0]);
+}
+if (mvPageEl) {
+  $('#mvBack').addEventListener('click', mvBack);
+  $('#mvClose').addEventListener('click', closeModPage);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && mvPageEl.style.display !== 'none') { e.preventDefault(); mvBack(); }
+  });
+  /* 点侧栏切页时先收起整页：否则导航高亮变了、画面还停在模组页，看着像「点不动」。
+     捕获阶段先跑，原有的跳页监听照旧生效（它绑得比这里早，但不受影响）。 */
+  $$('#railNav .rail-btn').forEach(b => b.addEventListener('click', () => closeModPage(), true));
 }
 /* 选定模组版本后真正落安装请求：目标实例选了就装进实例，停在「全部」走系统「选择保存位置」 */
 async function installModVersion(h, source, v, t, btn) {
@@ -2650,7 +2891,9 @@ async function installModVersion(h, source, v, t, btn) {
   else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
   else if (rr.saved) toast('MOD 已保存到: ' + rr.path);
   else toast('已装入 ' + t + '：' + rr.file);
+  return rr;
 }
+
 function setLat(elm, r) {
   if (!r.ok) { elm.textContent = '不可达'; elm.className = 'lat fail'; return; }
   elm.textContent = r.ms + ' ms';
@@ -2856,7 +3099,9 @@ function setupResPage(cfg) {
           /* 装 MOD 前先选模组版本：弹出版本列表（最新在前，可按加载器筛选），选定哪个装哪个。
              选完之后目标实例选了就装进实例，停在「全部」则弹系统「选择保存位置」。
              preferLoader：默认把分类切到目标实例的加载器（Fabric 实例只看 Fabric 构建）。 */
-          openModVerPicker(h, itemSrc(h), v => installModVersion(h, itemSrc(h), v, t, btn), inst && inst.loader);
+          openModVerPicker(h, itemSrc(h),
+            (v, proj, b) => installModVersion(proj || h, (proj && proj.source) || itemSrc(h), v, t, b || btn),
+            inst && inst.loader);
         } else if (cfg.type === 'modpack') {
           const jkMp = 'modpack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
           const rr = await dlGuarded(btn, jkMp, '下载安装中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包', () =>

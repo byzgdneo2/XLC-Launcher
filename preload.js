@@ -1,5 +1,9 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+/* 模组详情页要用的纯函数（游戏版本排序 / 加载器分组 / 逐版本前置解析）。
+   渲染层拿不到 require，但这段逻辑在单测里被覆盖（qa/modver-unit.js），
+   走 preload 挂进桥里，避免在 renderer 里再抄一份慢慢跑偏。 */
+const MODVER = require('./src/modver-core');
 
 contextBridge.exposeInMainWorld('lmc', {
   getConfig: () => ipcRenderer.invoke('config:get'),
@@ -63,6 +67,10 @@ contextBridge.exposeInMainWorld('lmc', {
   modrinthInstallMod: (p) => ipcRenderer.invoke('modrinth:install-mod', p),
   /* 模组版本列表（安装前先选模组版本用） */
   modrinthModVersions: (p) => ipcRenderer.invoke('modrinth:mod-versions', p),
+  /* 模组详情页：项目信息 + 全量版本 + 前置项目一次拿全（PCL 式页面用） */
+  modrinthModPage: (p) => ipcRenderer.invoke('modrinth:mod-page', p),
+  /* 模组版本页的纯函数（排序 / 分组 / 依赖计数），同 src/modver-core.js */
+  modver: MODVER,
   modrinthInstallModpack: (p) => ipcRenderer.invoke('modrinth:install-modpack', p),
   modrinthInstallPack: (p) => ipcRenderer.invoke('modrinth:install-pack', p),
   /* 世界（存档）下载：CurseForge 源，装进 gameDir/saves/<名字> */

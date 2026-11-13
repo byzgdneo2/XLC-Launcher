@@ -104,10 +104,18 @@ function mdToHtml(md) {
     const q = trim.match(/^>\s?(.*)$/);
     if (q) { flushPara(); flushList(); out.push('<blockquote>' + mdInline(q[1]) + '</blockquote>'); i++; continue; }
     /* 描述里本来就有的块级 HTML（<div align> / <details> / <table> / 单独一行的 <img>）
-       原样直通 —— 包进 <p> 会被浏览器隐式截断，结构就乱了 */
+       原样直通 —— 包进 <p> 会被浏览器隐式截断，结构就乱了。
+       作者常把标签拆成多行写（<img / width="100%" / src="…" / />），
+       只认第一行的话：<img 被浏览器当残缺标签丢掉，后面几行全变正文，
+       详情里就是满屏 width=/src= 源码。这里一直并到标签闭合为止。 */
     if (/^<\/?(div|table|thead|tbody|tfoot|tr|td|th|details|summary|ul|ol|li|h[1-6]|p|center|section|article|figure|figcaption|img|hr|br|iframe|video|audio|blockquote|font|span)\b/i.test(trim)) {
       flushPara(); flushList();
-      out.push(trim);
+      let html = trim, guard = 0;
+      while (!/>\s*$/.test(html) && i + 1 < lines.length && guard++ < 40) {
+        i++;
+        html += ' ' + lines[i].trim();
+      }
+      out.push(html);
       i++; continue;
     }
     const ul = trim.match(/^[-*+]\s+(.*)$/);

@@ -738,6 +738,12 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 .md-gallery img{ width:100%; border-radius:10px; border:1px solid rgba(255,255,255,.08); display:block; }
 .md-html{ max-height:340px; overflow-y:auto; font-size:13px; line-height:1.7; color:var(--tx); padding-right:6px; margin-top:10px; }
 .md-html img{ max-width:100%; border-radius:8px; margin:6px 0; }
+/* 作者常把 YouTube 那段 iframe 写成 width="560" 固定宽：弹窗只有 500 出头，
+   不夹住就会把整个描述区撑出横向滚动条（用户看到的那根灰条） */
+.md-html iframe{ max-width:100%; border:0; border-radius:8px; margin:6px 0; }
+.md-html video{ max-width:100%; border-radius:8px; }
+.md-html details{ margin:8px 0; }
+.md-html summary{ cursor:default; font-weight:600; color:var(--tx); }
 .md-html hr{ border:0; border-top:1px solid rgba(255,255,255,.12); margin:12px 0; }
 .md-html h1,.md-html h2,.md-html h3,.md-html h4{ font-size:15px; margin:14px 0 6px; }
 .md-html p{ margin:8px 0; }
@@ -753,24 +759,157 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 .md-sec{ font-size:12px; color:var(--tx2); margin-bottom:6px; }
 .md-frow{ padding:7px 10px; }
 .md-frow .btn{ padding:4px 12px; font-size:12px; }
-/* 模组版本选择弹窗（装 MOD 前先选版本） */
-.mv-sub{ font-size:12.5px; color:var(--tx2); margin:-4px 0 10px; }
-/* 加载器分类按钮（Fabric / NeoForge / Forge …，不是游戏版本） */
-.mv-tabs{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:9px; }
-.mv-tab{
-  padding:5px 11px; font-size:12px; border-radius:999px; cursor:pointer;
-  background:rgba(255,255,255,.04); border:1px solid var(--line2); color:var(--tx2);
-  transition:background .15s, color .15s, border-color .15s;
+/* ===== 模组详情页（PCL 式）：整页盖在内容区上（左侧导航 / 标题栏 / 状态栏都还能用） ===== */
+.mvpage{
+  position:fixed; left:76px; right:0; top:46px; bottom:32px; z-index:75;
+  display:flex; flex-direction:column; background:var(--bg0);
+  animation:pageIn .2s cubic-bezier(.22,.61,.36,1);
 }
-.mv-tab span{ opacity:.6; font-size:11px; margin-left:2px; }
-.mv-tab:hover{ color:var(--tx); border-color:rgba(255,255,255,.22); }
-.mv-tab.on{ background:rgba(96,165,250,.16); border-color:rgba(96,165,250,.55); color:#93c5fd; }
-.mv-more{ font-size:11.5px; color:var(--tx2); text-align:center; padding:6px 0 2px; }
-.mv-list{ max-height:min(52vh,460px); overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
-.mv-list .ver-row{ padding:8px 10px; }
-.mv-list .ver-row .v-name{ width:auto; flex:1; min-width:0; }
-.mv-list .ver-row .v-name b{ font-size:13px; }
-.mv-list .ver-row .btn{ padding:4px 14px; font-size:12px; }
+.mvp-head{
+  height:56px; flex:none; display:flex; align-items:center; gap:10px; padding:0 16px 0 12px;
+  border-bottom:1px solid var(--line); background:var(--bg1);
+}
+.mvp-back,.mvp-close{
+  width:34px; height:34px; flex:none; border:1px solid transparent; border-radius:9px;
+  background:transparent; color:var(--tx2); cursor:pointer;
+  display:flex; align-items:center; justify-content:center; transition:.15s;
+}
+.mvp-back .ic{ transform:rotate(90deg); }        /* 向下箭头转 90° = 返回 */
+.mvp-back:hover,.mvp-close:hover{ background:var(--card2); color:var(--tx); border-color:var(--line2); }
+.mvp-headtx{ min-width:0; flex:1; }
+.mvp-title{ font-size:15px; font-weight:700; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mvp-sub{ font-size:11.5px; color:var(--tx3); margin-top:2px; }
+
+.mvp-body{ flex:1; min-height:0; overflow-y:auto; padding:18px 22px 28px; }
+.mvp-body > *{ max-width:1120px; margin:0 auto 14px; }
+.mvp-body > *:last-child{ margin-bottom:0; }
+
+/* ---- 项目卡 ---- */
+.mvp-hero{ display:flex; gap:18px; align-items:flex-start; padding:20px 22px; }
+.mvp-hero-ic,.mvp-dep-ic,.mvp-row-ic{ object-fit:cover; flex:none; background:var(--card2); }
+.mvp-hero-ic{ width:64px; height:64px; border-radius:15px; }
+.mvp-hero-main{ flex:1; min-width:0; }
+.mvp-hero-t{ display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+.mvp-hero-t h3{ font-size:19px; font-weight:700; letter-spacing:.2px; }
+.mvp-slug{ font-size:11.5px; color:var(--tx3); font-family:var(--mono); }
+.mvp-tags{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.mvp-tags span{
+  font-size:10.5px; padding:2px 8px; border-radius:99px;
+  background:var(--acc-soft2); color:var(--acc2); border:1px solid var(--acc-border);
+}
+.mvp-desc{
+  font-size:12.5px; line-height:1.6; color:var(--tx2); margin-top:8px;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
+.mvp-meta{ display:flex; flex-wrap:wrap; align-items:center; gap:16px; margin-top:12px; font-size:11.5px; color:var(--tx2); }
+.mvp-meta span{ display:inline-flex; align-items:center; gap:5px; }
+.mvp-meta .ic{ color:var(--tx3); }
+.mvp-src{
+  font-size:10px; font-weight:700; letter-spacing:.3px; padding:1px 7px; border-radius:99px;
+  background:rgba(255,255,255,.07); color:var(--tx2); display:inline-block;
+}
+.mvp-hero-act{ display:flex; flex-direction:column; gap:8px; flex:none; }
+.mvp-hero-act .btn{ font-size:12px; padding:7px 14px; }
+
+/* ---- 游戏版本条：横向滚动，选中的用主色实心（PCL 的蓝 → 这里用 XLC 的绿） ---- */
+.mvp-tabcard{ padding:9px 12px; }
+/* 版本多的项目（Sodium 有 30 多个正式版本）标签条要能横向滚：不藏滚动条，
+   不然鼠标用户根本发现不了右边还有东西 */
+.mvp-tabs{ display:flex; gap:6px; overflow-x:auto; padding-bottom:3px; }
+.mvp-tab{
+  flex:none; display:inline-flex; align-items:center; gap:6px; padding:6px 14px;
+  border-radius:99px; border:1px solid transparent; background:transparent;
+  color:var(--tx2); font-size:12.5px; font-weight:600; cursor:pointer;
+  transition:background .15s, color .15s; font-family:var(--font);
+}
+.mvp-tab i{ font-style:normal; font-size:10.5px; opacity:.55; font-weight:600; }
+.mvp-tab:hover{ background:var(--card2); color:var(--tx); }
+.mvp-tab.on{ background:var(--acc); color:#04120e; }
+.mvp-tab.on i{ opacity:.72; }
+
+/* ---- 加载器分组：表头可折叠，展开后是「前置资源 + 版本列表」 ---- */
+.mvp-group{ padding:0; overflow:hidden; }
+.mvp-gh{
+  width:100%; display:flex; align-items:center; gap:10px; padding:15px 18px;
+  background:transparent; border:none; color:var(--tx); cursor:pointer; text-align:left;
+  font-family:var(--font);
+}
+.mvp-gh:hover{ background:var(--card2); }
+.mvp-gh-l{ font-size:14px; font-weight:700; }
+.mvp-gh-s{ font-size:12px; color:var(--tx2); }
+.mvp-gh-n{ margin-left:auto; font-size:11px; color:var(--tx3); }
+.mvp-chev{ color:var(--tx3); transform:rotate(180deg); transition:transform .18s; }
+.mvp-group.collapsed .mvp-chev{ transform:none; }
+.mvp-group.collapsed .mvp-gbody{ display:none; }
+.mvp-gbody{ padding:0 18px 16px; }
+.mvp-sec{
+  display:flex; align-items:center; gap:8px; margin:14px 0 9px;
+  font-size:11.5px; font-weight:700; letter-spacing:.6px; color:var(--tx3);
+}
+.mvp-sec::after{ content:''; flex:1; height:1px; background:var(--line); }
+.mvp-sec i{ font-style:normal; font-size:10.5px; padding:0 6px; border-radius:99px; background:var(--card2); color:var(--tx2); }
+.mvp-nodep{ font-size:12px; color:var(--tx3); padding:2px 0 4px; }
+
+/* ---- 前置资源（点进去就是它的页面） ---- */
+.mvp-deps{ display:flex; flex-direction:column; gap:8px; }
+.mvp-dep{
+  display:flex; gap:12px; align-items:center; width:100%; text-align:left;
+  padding:11px 13px; border-radius:var(--r-md); border:1px solid var(--line);
+  background:var(--card2); color:var(--tx); cursor:pointer; font-family:var(--font); transition:.15s;
+}
+.mvp-dep:hover{ border-color:var(--acc-border); background:rgba(52,211,153,.06); }
+.mvp-dep-ic{ width:42px; height:42px; border-radius:10px; }
+.mvp-dep-main{ flex:1; min-width:0; }
+.mvp-dep-t{ display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; }
+.mvp-dep-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top:4px; }
+.mvp-dep-tags span{ font-size:10px; padding:1px 7px; border-radius:99px; background:rgba(255,255,255,.06); color:var(--tx2); }
+.mvp-dep-d{ font-size:11.5px; color:var(--tx2); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mvp-dep-m{ display:flex; align-items:center; gap:12px; margin-top:5px; font-size:11px; color:var(--tx3); }
+.mvp-dep-go{ color:var(--tx3); display:flex; }
+.mvp-dep-go .ic{ transform:rotate(-90deg); }
+.mvp-dep:hover .mvp-dep-go{ color:var(--acc2); }
+.mvp-ok{
+  display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:700;
+  color:var(--acc2); background:var(--acc-soft2); border-radius:99px; padding:1px 8px;
+}
+.mvp-ok .ic{ width:12px; height:12px; }
+
+/* ---- 版本列表 ---- */
+.mvp-rows{ display:flex; flex-direction:column; gap:6px; }
+.mvp-row{
+  display:flex; align-items:center; gap:12px; padding:11px 12px;
+  border-radius:var(--r-md); border:1px solid transparent; transition:.14s;
+}
+.mvp-row:hover{ background:var(--card2); border-color:var(--line); }
+.mvp-row-ic{ width:34px; height:34px; border-radius:9px; }
+.mvp-row-main{ flex:1; min-width:0; }
+.mvp-row-n{ font-size:13px; font-weight:700; }
+.mvp-row-m{ display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:11.5px; color:var(--tx2); margin-top:3px; }
+.mvp-dot{ color:var(--tx3); opacity:.85; }
+.mvp-need{ color:var(--acc2); font-weight:600; }
+.mvp-row-f{
+  font-family:var(--mono); font-size:10.5px; color:var(--tx3); margin-top:3px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.mvp-row .btn{ padding:5px 16px; font-size:12px; flex:none; }
+.mvp-more{ font-size:11.5px; color:var(--tx3); text-align:center; padding:8px 0 2px; }
+
+/* ---- 加载 / 失败 / 空态 ---- */
+.mvp-empty{ text-align:center; color:var(--tx2); font-size:13px; padding:34px 0; }
+.mvp-loading{ display:flex; align-items:center; justify-content:center; gap:10px; padding:60px 0; color:var(--tx2); font-size:13px; }
+.mvp-spin{
+  width:16px; height:16px; border-radius:50%; flex:none;
+  border:2px solid rgba(255,255,255,.15); border-top-color:var(--acc2);
+  animation:mvspin .8s linear infinite;
+}
+@keyframes mvspin{ to{ transform:rotate(360deg); } }
+.mvp-retry{ display:flex; justify-content:center; padding:14px 0; }
+.mvp-ico-ph{ display:flex; align-items:center; justify-content:center; color:var(--tx3); }
+
+@media (max-width:1080px){
+  .mvp-hero{ flex-wrap:wrap; }
+  .mvp-hero-act{ flex-direction:row; width:100%; }
+}
 .res-filter .field{ display:flex; flex-direction:column; gap:6px; }
 .res-filter .field span{ font-size:12px; color:var(--tx2); }
 .res-row{ align-items:center; gap:14px; }

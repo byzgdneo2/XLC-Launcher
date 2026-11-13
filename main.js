@@ -156,6 +156,7 @@ try {
    → **1.4-pre1（1.4 预发布：账户页「默认皮肤」两处说法统一（以前一边写史蒂夫、一边写按 UUID 分配）；插件安装补 CSP 前校验入口仍在解包目录内、整合包下载临时文件名取 basename；账户页皮肤预览遇到坏图不再每帧重试解码，图片缓存加 32 条上限）**
    → **1.4-rc1（1.4 候选版：账户页坐下点一下会 Q 弹、连点 4 次触发转圈彩蛋（放 BGM、跟着鼓点每拍一弹）；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底）**
    → **1.4（正式版：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新的下载通道改为官网优先、GitHub 兜底，两条都不通直接提示下载失败）**
+   → **1.5-snapshot1（1.5 首个快照：装 MOD 选版本改成一整页（项目卡 / 游戏版本条 / 加载器分组 / 版本列表，照 PCL 的样子）+ 页面顶部列出必需前置 MOD 并可钻取（Iris → Sodium，最多 5 层）；CurseForge 的依赖也读出来了（files[].dependencies 里 relationType 3），CF 版本列表翻页取 300 个，老游戏版本不再消失；下载游戏的版本行新增「详情」，一点开中文 Minecraft Wiki 的对应版本页；修复详情弹窗里多行图片标签退化成满屏源码、YouTube 嵌入撑出横向滚动条；官网改成分享码访问，更新检测 / 版本回退 / 正式版更新的官网通道统一带码，不再撞 403）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -164,7 +165,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.4';
+const APP_VERSION = '1.5-snapshot1';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -3506,7 +3507,8 @@ const CAT_ZH = [
   [/economy/, '经济'], [/social|vot/, '社交'], [/education/, '教育'], [/quest/, '任务'],
   [/mini.?game/, '小游戏'], [/futur|scifi|sci-fi/, '科幻'], [/medieval/, '中世纪'],
   [/skyblock/, '空岛'], [/hardcore/, '极限生存'], [/combat/, '战斗'], [/farm|food/, '农业食物'],
-  [/map/, '地图'], [/optimiz/, '优化'], [/bug fix/, '修复'], [/tweaks|misc/, '杂项改进']
+  [/game.?mechanic/, '游戏机制'], [/map/, '地图'], [/optimiz/, '优化'],
+  [/bug fix/, '修复'], [/tweaks|misc/, '杂项改进']
 ];
 function catZh(name) {
   const n = String(name || '').toLowerCase();
@@ -3629,12 +3631,17 @@ const CF_API = 'https://mod.mcimirror.top/curseforge/v1';
 /* classId 见 CurseForge 官方类目表：6=Mods 4471=Modpacks 12=Resource Packs 6552=Shaders 6945=Data Packs 17=Worlds */
 const CF_CLASS = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552, datapack: 6945, world: 17 };
 const CF_LOADER = { forge: 1, fabric: 4, neoforge: 5, quilt: 6 };
-async function cfJson(p) {
+/* opt.method / opt.body：批量查项目要 POST /mods（官方只支持 POST，GET /mods?modIds= 返回空） */
+async function cfJson(p, opt) {
+  const method = (opt && opt.method) || 'GET';
+  const body = opt && opt.body ? JSON.stringify(opt.body) : undefined;
   let lastErr = null;
   for (let i = 0; i < 2; i++) { /* 镜像偶发抖动，失败等 1.2s 重试一次 */
     if (i > 0) await new Promise(r => setTimeout(r, 1200));
     try {
-      const res = await fetch(CF_API + p, { headers: { 'User-Agent': mrUA() }, signal: AbortSignal.timeout(15000) });
+      const headers = { 'User-Agent': mrUA() };
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      const res = await fetch(CF_API + p, { method, headers, body, signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error('CurseForge 接口 HTTP ' + res.status);
       return JSON.parse(Buffer.from(await res.arrayBuffer()).toString('utf8'));
     } catch (e) { lastErr = e; }
@@ -3960,6 +3967,197 @@ ipcMain.handle('modrinth:mod-versions', async (_e, p) => {
       });
     }
     return { ok: true, versions: list, loaders: MV_CORE.collectLoaders(list) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+/* ---------------- 模组详情页（PCL 式）：项目信息 + 全量版本 + 前置项目 ----------------
+   页面要画四块：项目卡 / 游戏版本条 / 前置资源 / 版本列表。旧的 mod-versions 只给一个
+   版本数组，前置还得再查一轮；这里一次打包返回，并按 source+id 缓存 3 分钟 ——
+   从前置页返回到上一层时不再打网络，翻来翻去也不费流量。 */
+const MOD_PAGE_TTL = 180000;
+const MOD_PAGE_CACHE = new Map();          /* 'modrinth:jei' → { at, data } */
+function modPageCacheGet(key) {
+  const hit = MOD_PAGE_CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > MOD_PAGE_TTL) { MOD_PAGE_CACHE.delete(key); return null; }
+  return hit.data;
+}
+function modPageCachePut(key, data) {
+  if (MOD_PAGE_CACHE.size > 80) {
+    const first = MOD_PAGE_CACHE.keys().next().value;
+    if (first) MOD_PAGE_CACHE.delete(first);
+  }
+  MOD_PAGE_CACHE.set(key, { at: Date.now(), data });
+}
+/* Modrinth 项目对象 → 页面形状（前置项目走同一个函数，两处字段完全一致） */
+function modPageProjectOf(p) {
+  const type = p.project_type || 'mod';
+  return {
+    id: p.id,
+    slug: p.slug || '',
+    title: p.title || p.slug || p.id,
+    icon: p.icon_url || '',
+    desc: String(p.description || '').replace(/\s+/g, ' ').trim(),
+    tags: (p.categories || []).slice(0, 5),
+    downloads: p.downloads || 0,
+    updated: p.updated || '',
+    type,
+    url: 'https://modrinth.com/' + type + '/' + encodeURIComponent(p.slug || p.id),
+    source: 'modrinth'
+  };
+}
+/* 批量取项目（前置资源一屏可能好几个，别一个一个发请求） */
+async function mrProjectsByIds(ids) {
+  const out = {};
+  const want = (ids || []).filter(Boolean);
+  for (let i = 0; i < want.length; i += 40) {
+    const chunk = want.slice(i, i + 40);
+    let arr = [];
+    try {
+      arr = await mrJson('/projects?ids=' + encodeURIComponent(JSON.stringify(chunk)));
+    } catch (_) { arr = []; }            /* 前置信息拿不到不该让整页失败 */
+    for (const it of (Array.isArray(arr) ? arr : [])) out[it.id] = modPageProjectOf(it);
+  }
+  return out;
+}
+/* CurseForge 项目对象 → 页面形状（与 modPageProjectOf 字段一致）。
+   id 统一加 cf 前缀：渲染层拿它当「钻进前置」的 key，也靠后缀判断走哪个源。 */
+function cfPageProjectOf(m, fallbackId) {
+  const mid = (m && m.id) || fallbackId;
+  const cls = { 6: 'mc-mods', 4471: 'modpacks', 12: 'texture-packs', 6552: 'shaders', 17: 'worlds' };
+  const slug = (m && m.slug) || '';
+  return {
+    id: 'cf' + mid,
+    slug,
+    title: (m && (m.name || m.slug)) || ('#' + mid),
+    icon: ((m && m.logo) && (m.logo.thumbnailUrl || m.logo.url)) || '',
+    desc: String((m && m.summary) || '').replace(/\s+/g, ' ').trim(),
+    tags: ((m && m.categories) || []).map(c => c.name).filter(Boolean).slice(0, 5),
+    downloads: (m && m.downloadCount) || 0,
+    updated: (m && m.dateModified) || '',
+    type: 'mod',
+    url: ((m && m.links) && m.links.websiteUrl) ||
+      ('https://www.curseforge.com/minecraft/' + (cls[(m && m.classId)] || 'mc-mods') + '/' + (slug || mid)),
+    source: 'curseforge'
+  };
+}
+/* 批量取 CF 项目（前置资源）。官方 /v1/mods 只认 POST + {modIds:[…]}；
+   GET /mods?modIds=… 在镜像上是空 data，别用。每批 40 个，失败不连坐整页。 */
+async function cfModsByIds(ids) {
+  const out = {};
+  const want = (ids || []).filter(Boolean);
+  for (let i = 0; i < want.length; i += 40) {
+    const chunk = want.slice(i, i + 40).map(x => Number(String(x).replace(/^cf/, ''))).filter(n => n > 0);
+    if (!chunk.length) continue;
+    let arr = [];
+    try {
+      arr = (await cfJson('/mods', { method: 'POST', body: { modIds: chunk } })).data || [];
+    } catch (_) { arr = []; }
+    for (const it of (Array.isArray(arr) ? arr : [])) {
+      const pr = cfPageProjectOf(it);
+      out[pr.id] = pr;
+    }
+  }
+  return out;
+}
+/* CF 文件对象里的依赖 → 页面统一的 deps 形状。
+   relationType：1 EmbeddedLibrary 2 OptionalDependency 3 RequiredDependency 4 Tool 5 Incompatible 6 Include
+   页面只画 required（前置资源），但要先把 optional 也留住，后续想显示「可选前置」不用再改数据层 */
+function cfFileDeps(f, selfId) {
+  const typeOf = { 1: 'embedded', 2: 'optional', 3: 'required', 4: 'tool', 5: 'incompatible', 6: 'embedded' };
+  const out = [];
+  for (const d of (f.dependencies || [])) {
+    if (!d || !d.modId) continue;
+    if (String(d.modId) === String(selfId)) continue;
+    out.push({ pid: 'cf' + d.modId, type: typeOf[d.relationType] || 'required', vid: '' });
+  }
+  return out;
+}
+ipcMain.handle('modrinth:mod-page', async (_e, p) => {
+  const source = p.source === 'curseforge' ? 'curseforge' : 'modrinth';
+  const key = source + ':' + String(p.projectId || '');
+  const cached = modPageCacheGet(key);
+  if (cached) return { ok: true, cached: true, ...cached };
+  try {
+    netReset();
+    if (source === 'curseforge') {
+      const modId = String(p.projectId || '').replace(/^cf/, '');
+      if (!/^\d+$/.test(modId)) throw new Error('CurseForge 项目 ID 无效');
+      const m = (await cfJson('/mods/' + modId)).data || {};
+      /* CF 文件列表分页：官方参数是 pageIndex，MCIM 镜像只认 index（传 pageIndex 会永远回第一页，
+         实测 2026-11-12）—— 两个都带上，谁认哪个都行。一页最多 100，取 3 页（300 个）：
+         JEI 有 4072 个文件，只取第一页的话 1.12 / 1.16 这些老版本会从标签条里整条消失。 */
+      const cfPage = async (idx) => {
+        const arr = (await cfJson('/mods/' + modId + '/files?index=' + idx +
+          '&pageIndex=' + Math.floor(idx / 100) + '&pageSize=100')).data || [];
+        return arr;
+      };
+      let files = await cfPage(0);
+      if (files.length >= 100) {
+        const rest = await Promise.all([1, 2].map(i => cfPage(i * 100).catch(() => [])));
+        const seen = new Set(files.map(f => f.id));
+        for (const arr of rest) for (const f of arr) if (!seen.has(f.id)) { seen.add(f.id); files.push(f); }
+      }
+      files.sort((a, b) => new Date(b.fileDate || 0) - new Date(a.fileDate || 0));
+      /* 依赖就在文件对象里（files[].dependencies = [{modId, relationType}]），
+         不用另开接口 —— 以前那句「CF 不提供依赖信息」是错的。 */
+      const versions = files.map(f => ({
+        ref: String(f.id),
+        name: f.displayName || f.fileName || String(f.id),
+        date: f.fileDate || '',
+        filename: f.fileName || '',
+        size: f.fileSize || 0,
+        loaders: MV_CORE.loadersOf({ gameVersions: f.gameVersions || [] }),
+        gv: (f.gameVersions || []).filter(g => /^\d+\.\d+/.test(g)),
+        downloads: f.downloadCount || 0,
+        deps: cfFileDeps(f, modId)
+      }));
+      /* 必需前置批量解析成项目卡；解析不到的从 deps 里剔掉，
+         否则会出现「1 项前置」却没有卡片可点的空档 */
+      const need = [];
+      for (const v of versions) {
+        for (const pid of MV_CORE.depsOf(v)) if (need.indexOf(pid) < 0) need.push(pid);
+      }
+      const depProjects = need.length ? await cfModsByIds(need) : {};
+      for (const v of versions) {
+        v.deps = v.deps.filter(d => d.type !== 'required' || depProjects[d.pid]);
+      }
+      const data = { source, project: cfPageProjectOf(m, modId), versions, depProjects, depsKnown: true };
+      modPageCachePut(key, data);
+      return { ok: true, ...data };
+    }
+    const proj = await mrJson('/project/' + encodeURIComponent(p.projectId));
+    const raw = await mrJson('/project/' + encodeURIComponent(p.projectId) + '/version');
+    /* 不按「最新 200 个」截断：JEI 这种一个项目 4000 个版本的，截断会把 1.12 / 1.16 这些
+       老游戏版本从标签条里整条抹掉，装老整合包的人就找不到了。只留 3000 当兜底。 */
+    const versions = (raw || []).slice(0, 3000).map(v => {
+      const files = v.files || [];
+      const file = files.find(f => f.primary) || files.find(f => /\.jar$/i.test(f.filename || f.url)) || files[0] || {};
+      return {
+        ref: v.id,
+        name: v.version_number || v.name || v.id,
+        date: v.date_published || '',
+        filename: file.filename || '',
+        size: file.size || 0,
+        loaders: MV_CORE.loadersOf(v),
+        gv: v.game_versions || [],
+        downloads: v.downloads || 0,
+        deps: (v.dependencies || [])
+          .map(d => ({ pid: d.project_id || '', type: d.dependency_type || 'required', vid: d.version_id || '' }))
+          .filter(d => d.pid)
+      };
+    });
+    /* 前置项目批量解析：只查必需依赖，且排除自己 */
+    const need = [];
+    for (const v of versions) {
+      for (const pid of MV_CORE.depsOf(v)) if (pid !== proj.id && need.indexOf(pid) < 0) need.push(pid);
+    }
+    const depProjects = need.length ? await mrProjectsByIds(need) : {};
+    const data = { source, project: modPageProjectOf(proj), versions, depProjects, depsKnown: true };
+    modPageCachePut(key, data);
+    return { ok: true, ...data };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -10886,7 +11084,13 @@ async function aiDiagnose(excerpt, rules) {
  * GitHub 连不上（被墙 / 限流 / 超时）时自动回退 ②，用户无感。
  * 开发态（未打包）可用环境变量 XLC_UPDATE_URL 指向本地调试页 —— 此时跳过 GitHub，
  * 直接走页面源（保证测试封闭性）。 */
-const UPDATE_DEFAULT_URL = 'https://neo2-pan.app.workbuddy.host/index5.html';
+/* 官网（NEO2 的 WorkBuddy 静态站）：2026-11-13 起整站改成「分享码」访问 —— 页面和网盘直链
+   不带 ?sharecode=<码> 一律返回 403 / 「链接不完整」（实测：index5.html 不带码是「链接不完整」，
+   /pan/xlc-launcher/xxx.exe 不带码是 403，带上码 200）。
+   换站点只改这两行；分享码变了也只改 OFFICIAL_SHARE。 */
+const OFFICIAL_HOST = 'https://neo2-pan.app.workbuddy.host/';
+const OFFICIAL_SHARE = 'AN4WYT6D57';
+const UPDATE_DEFAULT_URL = OFFICIAL_HOST + 'index5.html?sharecode=' + OFFICIAL_SHARE;
 const UPDATE_TIMEOUT = 20000;
 const GH_RELEASE_API = 'https://api.github.com/repos/byzgdneo2/XLC-Launcher/releases/latest';
 /* 给「打开下载页」用的人类可读地址：API 端点返回的是 JSON，不能让用户点开看一坨数据 */
@@ -10984,12 +11188,22 @@ function preUpdateDecision(remoteVer, skipEnabled) {
 function absUrl(u, base) {
   try { return new URL(String(u), base).href; } catch (_) { return String(u || ''); }
 }
+/* 官网地址补分享码。必须做：页面里写的是相对直链 pan/xlc-launcher/xxx.exe，
+   new URL(href, 带 sharecode 的页面地址) 只会继承路径、**不会继承 query**，
+   补全出来的直链不带码 → 官网回 403（1.5 实测）。 */
+function withSharecode(u) {
+  const s = String(u || '');
+  if (!OFFICIAL_SHARE) return s;
+  if (!/^https:\/\/neo2-pan\.app\.workbuddy\.host\//i.test(s)) return s;
+  if (/[?&]sharecode=/i.test(s)) return s;
+  return s + (s.indexOf('?') >= 0 ? '&' : '?') + 'sharecode=' + encodeURIComponent(OFFICIAL_SHARE);
+}
 /* 官方网盘的下载目录：版本回退一律从这里下 —— 官网是唯一的分发口，
    不从 GitHub 附件下（GitHub 只负责「发现版本 / 读公告」） */
-const OFFICIAL_PAN_BASE = absUrl('pan/xlc-launcher/', UPDATE_DEFAULT_URL);
+const OFFICIAL_PAN_BASE = absUrl('pan/xlc-launcher/', OFFICIAL_HOST);
 function officialDlUrl(name) {
   const n = String(name || '').trim();
-  return n ? OFFICIAL_PAN_BASE + encodeURIComponent(n) : OFFICIAL_PAN_BASE;
+  return withSharecode(n ? OFFICIAL_PAN_BASE + encodeURIComponent(n) : OFFICIAL_PAN_BASE);
 }
 function isOfficialPanUrl(u) {
   return /^https:\/\/neo2-pan\.app\.workbuddy\.host\//i.test(String(u || ''));
@@ -11023,7 +11237,7 @@ function parseUpdatePage(body, pageUrl) {
       const sha = String(d.sha256 || d.sha || d.checksum || '').trim().toLowerCase();
       out.downloads.push({
         name: dname,
-        url: absUrl(u, pageUrl),
+        url: withSharecode(absUrl(u, pageUrl)),
         kind: String(d.kind || d.type || '').trim(),
         size: String(d.size || '').trim(),
         version: String(d.version || '').trim() || verFromFileName(dname),
@@ -11063,7 +11277,7 @@ function parseUpdatePage(body, pageUrl) {
       const kind = /setup|install/i.test(name) ? '安装版' : /portable/i.test(name) ? '便携版' : '';
       /* 下载页可选提供 <a href="..." data-sha256="<64 hex>">：有就带上，下载/替换时强校验 */
       const sm = m[0].match(/data-sha256="([a-fA-F0-9]{64})"/);
-      out.downloads.push({ name, url: absUrl(href, pageUrl), kind, size: '', version: verFromFileName(name), sha256: sm ? sm[1].toLowerCase() : '' });
+      out.downloads.push({ name, url: withSharecode(absUrl(href, pageUrl)), kind, size: '', version: verFromFileName(name), sha256: sm ? sm[1].toLowerCase() : '' });
     }
   }
   /* 版本说明：下载页的 .intro 段落 */
@@ -11190,7 +11404,7 @@ function updateParserSelfTest() {
     + '<a class="btn" href="pan/xlc-launcher/XLC-Launcher-Beta1.0-Setup.exe" download="XLC-Launcher-Beta1.0-Setup.exe">⬇ 下载</a>'
     + '<a class="btn" href="pan/xlc-launcher/XLC-Launcher-Beta1.0-portable.exe" download="XLC-Launcher-Beta1.0-portable.exe">⬇ 下载</a>'
     + '</body></html>';
-  const BASE = 'https://neo2-pan.app.workbuddy.host/index5.html';
+  const BASE = UPDATE_DEFAULT_URL;   /* 带分享码的官网下载页，和线上真正取的那一页同一串 */
   const p = parseUpdatePage(PAGE, BASE);
   ok(p.version === 'Beta1.0', 'T1 从下载文件名解析版本号', p.version);
   ok(p.downloads.length === 2, 'T2 解析出两个下载直链', 'n=' + p.downloads.length);
@@ -11233,7 +11447,7 @@ function updateParserSelfTest() {
   const p3 = parseUpdatePage(CUR, BASE);
   ok(p3.version === CV && compareVer(p3.version, APP_VERSION) === 0,
     'T14 解析当前版本下载页并与本机版本一致', p3.version + ' vs ' + APP_VERSION);
-  ok(p3.downloads.length === 2 && p3.downloads.some(d => d.url.endsWith(CV + '-Setup.exe')),
+  ok(p3.downloads.length === 2 && p3.downloads.some(d => d.url.split('?')[0].endsWith(CV + '-Setup.exe')),
     'T15 当前版本安装包直链解析正常', p3.downloads[0] && p3.downloads[0].url);
   /* 下载页里历史版本的直链与最新版同在一页（「回退到历史版本」就靠它们），
      谁排在前面取决于下载页的 HTML 结构 —— 不能只认第一处出现的文件名：
@@ -11335,8 +11549,16 @@ function updateParserSelfTest() {
     buildUpdateHistory(hp.downloads, '1.1').every(h => h.downloads.every(d => isOfficialPanUrl(d.url))),
     'T16t 官网下载页解析出的直链原样保留（不重复改写）');
   ok(officialDlUrl('XLC-Launcher-1.2-portable.exe') ===
-    'https://neo2-pan.app.workbuddy.host/pan/xlc-launcher/XLC-Launcher-1.2-portable.exe',
-    'T16u 官网直链拼接规则', officialDlUrl('XLC-Launcher-1.2-portable.exe'));
+    OFFICIAL_HOST + 'pan/xlc-launcher/XLC-Launcher-1.2-portable.exe?sharecode=' + OFFICIAL_SHARE,
+    'T16u 官网直链拼接规则（带分享码）', officialDlUrl('XLC-Launcher-1.2-portable.exe'));
+  /* 页面里的相对直链补全后必须带上分享码：不带码官网回 403（1.5 实测） */
+  ok(withSharecode(absUrl('pan/xlc-launcher/XLC-Launcher-1.2-portable.exe', UPDATE_DEFAULT_URL))
+    .indexOf('?sharecode=' + OFFICIAL_SHARE) > 0, 'T16u2 相对直链补全后带分享码');
+  ok(withSharecode('https://neo2-pan.app.workbuddy.host/pan/x/x.exe?sharecode=' + OFFICIAL_SHARE) ===
+    'https://neo2-pan.app.workbuddy.host/pan/x/x.exe?sharecode=' + OFFICIAL_SHARE,
+    'T16u3 已有分享码不重复追加');
+  ok(withSharecode('https://github.com/other/x.exe') === 'https://github.com/other/x.exe',
+    'T16u4 别的域名不强行加码');
   /* 1.4 正式版：正式版更新的下载通道 = 官网优先、GitHub 兜底（检测仍走 GitHub） */
   const ghDl = [{ name: 'XLC-Launcher-' + CV + '-portable.exe',
     url: 'https://github.com/byzgdneo2/XLC-Launcher/releases/download/v' + CV + '/XLC-Launcher-' + CV + '-portable.exe',
@@ -11430,42 +11652,55 @@ function updateParserSelfTest() {
  * 公告属于当前版本：改完就往这条里加条目，别再动已经发出去的内容（那是改写历史）。 */
 const CHANGELOG = [
   {
-    version: '1.4',
-    date: '2026-11-11',
-    tag: '正式版',
-    notice: '1.4 正式版：账户页的皮肤预览活了 —— 坐下姿势点一下画面，小人会被按扁再弹起来；连点 4 次还有彩蛋：小人转着圈、跟着 BGM 的鼓点一下一下弹。这一版还把正式版更新的下载顺序改了：先走官网，官网不通再走 GitHub，两条都不通会直接告诉你下载失败。',
+    version: '1.5-snapshot1',
+    date: '2026-11-13',
+    tag: '快照版',
+    notice: '1.5 首个快照：装 MOD 选版本改成一整页（项目卡、游戏版本条、加载器分组、版本列表，照 PCL 的样子），顶上直接列出这个 MOD 的必需前置 —— 点进去就能选前置的版本，前置自己的前置还能再往上一层（比如 Iris 要 Sodium）。CurseForge 的依赖也读出来了：以前以为它不给，其实就在每个文件的信息里。下载游戏的版本行右侧新增「详情」，一点直接开中文 Minecraft Wiki 的对应版本页面。',
     groups: [
       {
-        icon: 'i-user',
-        title: '新增 · 坐下点一下会 Q 弹，连点 4 次有彩蛋',
+        icon: 'i-puzzle',
+        title: '新增 · 装 MOD 选版本改成整页，照 PCL 的样子',
         items: [
-          '**坐下姿势点一下预览画面，小人会被按扁再弹回来**：满压扁约六成高、1.3 倍宽，松手还会过冲拉长再颤两下才收住 —— 拖动超过 6px 或按住超过 600ms 不算点击，不跟转视角打架',
-          '**连点 4 次（每次间隔 1.2 秒内）触发彩蛋**：小人绕自身竖轴转圈（约 240°/秒）、跟着 BGM 的鼓点每拍弹一下（0.46 秒一拍，从曲子里实测出来的）；再点一下、切动作、切账户或离开账户页都会立刻收住，音乐 240ms 淡出不硬掐',
-          '**64×32 老皮肤 / 穿甲预览同样生效**：平面画法的拉伸加了限位，回弹拉长不会把头顶切出画布'
+          '**从弹窗换成一整页**：左边项目卡（图标 / 名称 / 来源 / 下载量 / 标签），下面一排游戏版本，再往下按 Fabric、NeoForge、Forge、Quilt 分组的版本列表 —— 以前那点弹窗高度，找一个特定游戏版本的某个加载器版本要滚半天',
+          '**游戏版本条只列正式版本号**：Modrinth 的 `game_versions` 里混着 rc、pre 和快照串，以前会把 Sodium 凑出 44 个标签；现在只收 `1.21.8`、`26.3` 这种，且按版本号大小排（26.3 排在 1.21.11 前面，快照沉底）',
+          '**每个版本行都标出「前置 N 项」**：只算必需前置，可选前置不计数 —— 装之前就知道还要额外拿几个东西',
+          '**版本列表不截断**：JEI 这种有四千多个文件的项目也会全取回来，只留一个 3000 的兜底，避免老版本从列表里消失'
         ]
       },
       {
-        icon: 'i-pulse',
-        title: '修复 · 彩蛋转圈的弹跳不再「一顿一顿」',
+        icon: 'i-box',
+        title: '新增 · 前置 MOD 能看见，也能点进去装',
         items: [
-          '**每拍不再瞬间换成压扁形状**：以前一拍只差一帧（33ms 内身高掉三分之一），看着像闪烁；现在改成按拍内相位算的连续曲线 —— 踩点开始下压、0.17 秒到底、回弹过冲拉长、下一拍之前回正，60fps 下相邻帧身高变化不超过 7%',
-          '**鼓点跟着音频时钟对齐**：相位自己按帧往前走，只用播放进度每帧轻拉校准 —— 音乐起播慢半拍、中途卡一下，动作都不会跟着抖；没有音频设备时退回系统时钟，动画照放'
+          '**页面顶部列出必需前置**：装 Iris 时顶上就是 Sodium 的卡片（图标 / 简介 / 下载量 / 来源），点一下钻进 Sodium 自己的版本页',
+          '**前置的前置还能再往上一层**：最多记 5 层，装完自动退回上一层并把刚装的那个标成「已装」，不用自己再找回来',
+          '**CurseForge 的依赖也读出来了**：以前页面写着「CurseForge 不提供依赖信息」，其实依赖就在 `GET /mods/{id}/files` 每个文件的 `dependencies` 里（relationType 3 = 必需），PCL 能显示就是因为读了同一份；项目名靠 `POST /v1/mods` 批量换，解析不到的必需项直接剔掉，不会出现「1 项前置」却没卡可点',
+          '**CurseForge 版本列表会翻页**：一页最多 50 个，JEI 有四千多个文件，只取第一页会让 1.12 / 1.16 从标签条里整条消失；现在取 3 页共 300 个（镜像的 `/files` 只认 `index`，两个参数都带上）'
         ]
       },
       {
         icon: 'i-download',
-        title: '改进 · 正式版更新优先走官网，GitHub 兜底',
+        title: '新增 · 下载游戏的版本行有「详情」，直通中文 Wiki',
         items: [
-          '**检测照旧走 GitHub，下载换了顺序**：检测到的这一版是正式版、官网下载页上也挂着这个文件时，下载默认从官网网盘拿；官网没有这个文件、或者下载半路失败，自动改用 GitHub 附件重试一次 —— 快照 / 候选版不受影响，还是走 GitHub',
-          '**两条通道都不通就直接说清楚**：不会再停在一个不动的进度条上，会明确提示「下载更新失败」，并说明是官网和 GitHub 都没连上，可以稍后重试或到下载页手动下载'
+          '**每行右侧多一个「详情」**：点了直接开 `zh.minecraft.wiki` 的该版本页面（26.3 → `Java版26.3`），快照、预发布、候选版同样拼得出来，和 MOD 行那个「详情」是同一个位置、同一个形状',
+          '**远古版本按维基自己的标题走**：`Java版b1.7.3` 实测是 404，改成 `Beta 1.7.3` / `Alpha 1.2.6`；空格用下划线，和浏览器地址栏里看到的一致',
+          '**只跳外链、不开站内弹窗**：版本改了什么、加了哪些方块，维基写得比我们全；下载页用「下载恢复器」插件放回来之后，这个按钮就在每行右侧'
         ]
       },
       {
-        icon: 'i-lock',
-        title: '修正 · 转圈到侧面不再顶出画布',
+        icon: 'i-image',
+        title: '修复 · 详情弹窗的描述不再糊成一屏源码',
         items: [
-          '**侧身加满压扁时腿会甩到画面左右边**：3D 画法加了越界平移兜底，把整体轻轻挪回画面里 —— 只在越界时才生效，平时的构图、大小完全不变',
-          '**弹跳幅度与单击完全同一套参数**：彩蛋里每拍的压扁峰值与过冲和「点一下」一致，视觉上是同一根弹簧'
+          '**多行写的图片标签会退化成正文**：作者把图片拆成「img / width=100% / src=… / 闭合斜杠」好几行，以前只把第一行当 HTML 直通，浏览器把残缺标签丢掉，剩下几行被转义成文字 —— 弹窗里于是满屏 width 和 src 的源码；现在标签没闭合就逐行并到闭合为止',
+          '**YouTube 嵌入不再撑出横向滚动条**：嵌入代码写死 `width="560"`，弹窗内容区只有 506px；给 `iframe`（以及 `video` / `details`）补了最大宽度，描述区不再左右晃',
+          '**标签「game-mechanics」补上中文**：以前这个分类一直显示英文，现在显示「游戏机制」'
+        ]
+      },
+      {
+        icon: 'i-globe',
+        title: '修复 · 官网换成分享码访问，更新通道跟着改',
+        items: [
+          '**官网整站现在要带分享码才能打开**：不带码的下载页只回「链接不完整」，网盘直链直接 403；更新检测的官网兜底、版本回退清单、正式版更新的「官网优先」三条路现在都带着码走，分享码换了只改一处',
+          '**页面里的相对直链补全后必须补码**：下载页写的是相对路径，按页面地址补全会继承目录、但不继承查询参数 —— 以前那样补出来是不带码的直链，官网一律 403；现在是补全后再挂码'
         ]
       }
     ]
