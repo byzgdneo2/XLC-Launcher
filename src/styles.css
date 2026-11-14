@@ -784,6 +784,104 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 .mvp-body > *{ max-width:1120px; margin:0 auto 14px; }
 .mvp-body > *:last-child{ margin-bottom:0; }
 
+/* ---- 安装版本页（PCL 式）：版本名一栏 + 加载器行 + 开始下载 ---- */
+.ip-hero{ display:flex; align-items:center; gap:14px; padding:16px 18px; }
+.ip-hero .v-block{ width:46px; height:46px; border-radius:12px; flex:none; }
+.ip-hero-main{ flex:1; min-width:0; }
+.ip-name{
+  width:100%; height:44px; padding:0 14px; font-size:16px; font-weight:600;
+  border-radius:var(--r-md); border:1px solid var(--line2); background:var(--card2);
+  color:var(--tx); font-family:var(--font); transition:.15s;
+}
+.ip-name::placeholder{ color:var(--tx3); font-weight:600; }
+.ip-name:focus{ outline:none; border-color:var(--acc-border); background:var(--card); }
+.ip-meta{ display:flex; flex-wrap:wrap; gap:14px; margin-top:9px; font-size:11.5px; color:var(--tx3); }
+/* 加载器卡片（手风琴）：折叠 = 一行，展开 = 卡片里直接铺出全部版本 */
+.ip-cards{ display:flex; flex-direction:column; gap:9px; }
+.ip-card{
+  border-radius:var(--r-md); border:1px solid var(--line); background:var(--card2);
+  overflow:hidden; transition:.15s;
+}
+.ip-card:hover{ border-color:var(--line2); }
+.ip-card.open{ border-color:var(--acc-border); background:var(--card); box-shadow:0 6px 20px rgba(0,0,0,.18); }
+.ip-card.sel{ border-color:var(--acc-border); }
+.ip-ct{
+  display:flex; align-items:center; gap:12px; width:100%; text-align:left;
+  padding:14px 16px; border:0; background:transparent; color:var(--tx);
+  font-family:var(--font); font-size:14.5px; font-weight:700; cursor:pointer; transition:.15s;
+}
+.ip-ct:hover{ background:rgba(52,211,153,.05); }
+.ip-card.off .ip-ct{ cursor:default; opacity:.62; }
+.ip-card.off .ip-ct:hover{ background:transparent; }
+.ip-ci{
+  width:26px; height:26px; flex:none; display:flex; align-items:center; justify-content:center;
+  border-radius:8px; background:rgba(255,255,255,.055); color:var(--tx2); transition:.15s;
+}
+.ip-card.open .ip-ci,.ip-card.sel .ip-ci{ color:var(--acc); background:rgba(52,211,153,.13); }
+.ip-ct-n{ flex:none; }
+.ip-ct-s{
+  flex:1; min-width:0; text-align:right; font-size:12px; font-weight:500; color:var(--tx3);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ip-card.sel .ip-ct-s{ color:var(--acc); }
+.ip-chev{ width:18px; flex:none; display:flex; align-items:center; justify-content:center; color:var(--tx3); }
+.ip-chev .ic{ transform:rotate(-90deg); }            /* 向下箭头转 -90° = 向右（折叠） */
+.ip-card.sel .ip-chev{ color:var(--acc); }
+.ip-card.sel .ip-chev .ic{ transform:none; }          /* 已选 + 折叠 = 勾 */
+.ip-card.open .ip-chev .ic{ transform:rotate(180deg); }  /* 展开 = 箭头朝上 */
+.ip-card.off .ip-chev{ visibility:hidden; }
+
+/* 展开区：最新版一块 + 全部版本逐条 */
+.ip-cb{ padding:2px 16px 14px 54px; }
+.ip-load{ font-size:12.5px; color:var(--tx3); padding:6px 0 10px; }
+.ip-load.fail{ color:var(--warn); }
+.ip-load .btn{ margin-left:8px; }
+.ip-latest{
+  display:flex; flex-direction:column; gap:3px; padding:10px 14px; margin-bottom:12px;
+  border-radius:var(--r-sm); background:rgba(52,211,153,.07); border:1px solid rgba(52,211,153,.18);
+}
+.ip-latest-v{ font-size:15px; font-weight:700; display:flex; align-items:center; gap:8px; }
+.ip-vtag{
+  font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:999px;
+  background:rgba(52,211,153,.16); color:var(--acc2);
+}
+.ip-latest-d{ font-size:11.5px; color:var(--tx3); }
+.ip-all{ font-size:11.5px; color:var(--tx3); margin:0 0 5px; }
+.ip-vlist{ display:flex; flex-direction:column; }
+.ip-vr{
+  display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+  padding:9px 10px; border:0; border-radius:var(--r-sm); background:transparent;
+  color:var(--tx); font-family:var(--font); cursor:pointer; transition:.12s;
+}
+.ip-vr:hover{ background:rgba(255,255,255,.045); }
+.ip-vr-i{ width:16px; flex:none; display:flex; color:var(--tx3); }
+.ip-vr.sel .ip-vr-i{ color:var(--acc); }
+.ip-vr-n{ font-size:13.5px; font-weight:600; white-space:nowrap; }
+.ip-vr-d{
+  flex:1; min-width:0; text-align:right; font-size:11.5px; color:var(--tx3);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ip-vr-c{ width:16px; flex:none; display:flex; color:var(--acc); opacity:0; }
+.ip-vr.sel{ background:rgba(52,211,153,.1); }
+.ip-vr.sel .ip-vr-n{ color:var(--acc); }
+.ip-vr.sel .ip-vr-c{ opacity:1; }
+
+/* 底部悬浮「开始下载」：跟着滚动条走，永远压在内容上 */
+#ipBody{ padding-bottom:10px; }
+.ip-dock{
+  flex:none; padding:12px 22px 14px;
+  border-top:1px solid var(--line); background:var(--bg1);
+}
+.ip-dock-in{ max-width:1120px; margin:0 auto; display:flex; flex-direction:column; align-items:center; gap:9px; }
+.ip-sum{ font-size:12.5px; color:var(--tx2); text-align:center; }
+.ip-sum b{ color:var(--tx); }
+.ip-prog{ width:100%; }
+.ip-dock-btns{ display:flex; align-items:center; gap:10px; }
+.ip-go{
+  min-width:210px; height:46px; justify-content:center; border-radius:999px;
+  font-size:15px; font-weight:700; box-shadow:0 8px 22px rgba(52,211,153,.26);
+}
+
 /* ---- 项目卡 ---- */
 .mvp-hero{ display:flex; gap:18px; align-items:flex-start; padding:20px 22px; }
 .mvp-hero-ic,.mvp-dep-ic,.mvp-row-ic{ object-fit:cover; flex:none; background:var(--card2); }

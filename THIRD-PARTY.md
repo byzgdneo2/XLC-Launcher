@@ -1,7 +1,7 @@
 # 第三方组件与致谢 / Third-Party Components & Credits
 
-Xero Lite Craft Launcher（XLC）自身代码以 [MIT 许可](LICENSE) 发布。
-程序中使用或随程序分发的第三方组件适用其各自的许可条款，列明如下。
+Xero Lite Craft Launcher（XLC）自身代码以 [MIT 许可](LICENSE) 发布；根目录的 LICENSE
+只覆盖 XLC 自己的源代码，程序中使用或随程序分发的第三方组件适用其各自的许可条款，列明如下。
 
 XLC 是独立开发的第三方启动器，**并非** Minecraft 官方产品，与 Microsoft、Mojang
 Studios 或下列任何项目均无隶属、赞助或背书关系。

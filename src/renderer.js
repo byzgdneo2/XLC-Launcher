@@ -140,6 +140,14 @@ function cmpVer(a, b) {
 function fmtDate(iso) {
   try { return new Date(iso).toISOString().slice(0, 10); } catch (_) { return ''; }
 }
+/* ISO → 本地「2026/11/12 21:29」（加载器构建时间用，照 PCL 的写法） */
+function fmtStamp(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const p = n => (n < 10 ? '0' : '') + n;
+  return d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 function typeName(t) {
   return { release: '正式版', snapshot: '快照', old_beta: 'Beta', old_alpha: 'Alpha' }[t] || t;
 }
@@ -1646,19 +1654,19 @@ function verRow(v, pinTag, pinCls) {
     act.appendChild(detail);
     const re = el('button', 'btn ghost', '<svg class="ic sm"><use href="#i-refresh"/></svg> 再装一份');
     re.title = '重新下载安装（可修复损坏的实例）或以自定义名称再装一份';
-    re.addEventListener('click', () => openInstallModal(v, true));
+    re.addEventListener('click', () => openInstallPage(v, true));
     act.appendChild(re);
   } else {
     act.appendChild(detail);
     const btn = el('button', 'btn primary', '<svg class="ic sm"><use href="#i-download"/></svg> 安装');
-    btn.addEventListener('click', () => openInstallModal(v));
+    btn.addEventListener('click', () => openInstallPage(v));
     act.appendChild(btn);
   }
   /* 整行可点 = 点「安装」：以前只有那个小按钮能点，点行体没任何反应，
      既是鼠标用户的困惑源，也让手柄完全够不到这一行（见 GP_SEL 的 data-gpclick）。 */
   row.addEventListener('click', (ev) => {
     if (ev.target.closest('button')) return;
-    openInstallModal(v, installed);
+    openInstallPage(v, installed);
   });
   gpMark(row);
   return row;
@@ -1768,8 +1776,17 @@ document.addEventListener('keydown', e => {
 });
 /* 安装中关闭弹窗 = 转入后台：主进程下载不中断，进度在右下角「下载任务」浮窗里看，完成时会 toast + 自动刷新 */
 function closeToBackground() {
+  const msg = '安装已转入后台继续下载，进度见右下角「下载任务」浮窗；完成后会自动刷新版本列表';
+  /* 安装是整页：收页时不能走 closeInstallPage（它有「下载中不许关」的拦截），这里直接收 */
+  if (ipPageEl && ipPageEl.style.display !== 'none') {
+    ipPageEl.style.display = 'none';
+    ipToken++;
+    ipVer = null; ipReinstall = false;
+    toast(msg, 'warn');
+    return;
+  }
   closeModal();
-  toast('安装已转入后台继续下载，进度见右下角「下载任务」浮窗；完成后会自动刷新版本列表', 'warn');
+  toast(msg, 'warn');
 }
 
 /* ---------------- 加载器「选择版本」通用组件 ----------------
@@ -1862,6 +1879,310 @@ function mountLoaderVerPicker(host, kind, mcVer, opts) {
   return { val: () => sel.value.trim(), sel };
 }
 
+/* ---------------- 安装版本页（PCL 式） ----------------
+   照 PCL 的「安装版本」页整页铺开：顶上一栏版本名（改个名字就是装成自定义实例），
+   底下一叠加载器卡片（Forge / NeoForge / Fabric / Quilt / OptiFine）。每张卡片折叠时右边写
+   「可以添加 / 查询超时 / 不兼容的原因」，点开就在卡片里直接铺出这个加载器的**全部版本**
+   （最新版单独一块 + 全部版本逐条列出，Forge 带「发布于 …」，Fabric / NeoForge 带「稳定版 / 测试版」）；
+   同一时间只展开一张（PCL 也是手风琴）。选中的版本就是「开始下载」要装的那个；
+   一张卡片都不展开 = 原版。底部是浮在内容上的「开始下载」大按钮。 */
+const ipPageEl = $('#ipPage');
+/* PCL 的顺序是 Forge / NeoForge / Fabric / OptiFine。Quilt 是我们额外支持的，
+   插在 Fabric 后面 —— 照 PCL 只列四个会把 Quilt 用户的路堵死。 */
+const IP_LOADERS = ['Forge', 'NeoForge', 'Fabric', 'Quilt', 'OptiFine'];
+/* 卡片左侧的小图标：用我们的线性图标库凑出「每种加载器长得不一样」的观感 */
+const IP_ICON = { Forge: '#i-tools', NeoForge: '#i-zap', Fabric: '#i-puzzle', Quilt: '#i-package', OptiFine: '#i-shader' };
+let ipVer = null, ipReinstall = false, ipLoader = 'Vanilla', ipBuild = '';
+let ipOpen = '';              /* 当前展开的加载器（'' = 全折叠 = 装原版） */
+let ipToken = 0;              /* 每次开页自增：慢请求回来时别覆盖新页面 */
+
+function openInstallPage(v, reinstall) {
+  if (!ipPageEl || !v) return;
+  ipVer = v;
+  ipReinstall = !!reinstall;
+  ipLoader = 'Vanilla';
+  ipBuild = '';
+  ipOpen = '';
+  /* 先清掉上一版的结果，避免看到别的版本残留的结论 */
+  loaderCompatOverride.delete(v.id);
+  resetLoaderVerCache();      /* 每次开页都重新取版本列表（上游随时会发新版本） */
+  $('#ipTitle').textContent = '安装 ' + v.id;
+  $('#ipSub').textContent = typeName(v.type) + ' · 发布于 ' + fmtDate(v.releaseTime) +
+    ' · 清单来源: ' + (S.manifestVia === 'official' ? 'Mojang 官方' : 'BMCLAPI 镜像');
+  ipPageEl.style.display = 'flex';
+  renderInstallPage();
+  /* 实时确认每个加载器对这个版本到底有没有构建（规则差异太大，硬编码必错）。
+     Fabric 跟进新版本最快，先查它，其余后台并行补。 */
+  const tk = ++ipToken;
+  refineLoaderCompat(v, () => { if (ipToken === tk && ipVer === v) refreshInstallRows(); }, { priority: 'Fabric' });
+}
+function closeInstallPage() {
+  if (!ipPageEl || ipPageEl.style.display === 'none') return;
+  if (installingNow) {
+    toast('正在下载，请用页面里的「转入后台」或「停止安装」按钮', 'warn');
+    return;
+  }
+  ipPageEl.style.display = 'none';
+  ipToken++;
+  ipVer = null; ipReinstall = false; ipLoader = 'Vanilla'; ipBuild = ''; ipOpen = '';
+}
+function renderInstallPage() {
+  const v = ipVer;
+  if (!v) return;
+  const body = $('#ipBody');
+  body.innerHTML =
+    '<div class="card ip-hero">' +
+      (blockIconHtml(v.type) ||
+        '<div class="v-block" style="display:flex;align-items:center;justify-content:center"><svg class="ic"><use href="#i-package"/></svg></div>') +
+      '<div class="ip-hero-main">' +
+        '<input type="text" class="ip-name" id="ipName" maxlength="60" placeholder="' + esc(v.id) + '" spellcheck="false">' +
+        '<div class="ip-meta">' +
+          '<span>' + esc(typeName(v.type)) + ' · ' + esc(fmtDate(v.releaseTime)) + '</span>' +
+          '<span>清单来源: ' + esc(S.manifestVia === 'official' ? 'Mojang 官方' : 'BMCLAPI 镜像') + '</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    (ipReinstall
+      ? '<div class="warnbar tip">将以「覆盖安装」方式重装（可用于修复损坏的实例）；想保留原实例，在版本名里填一个新名字</div>'
+      : '') +
+    '<div class="mvp-sec">模组加载器<i>一张都不选 = 原版</i></div>' +
+    '<div class="ip-cards" id="ipCards"></div>';
+  /* 底部按钮不在滚动区里：它是 #ipPage 的最后一个 flex 子项，永远贴在窗口底部
+     （照 PCL 的悬浮「开始下载」），版本列表再长也只是在它上面滚动。 */
+  const dock = $('#ipDock');
+  if (dock) {
+    dock.innerHTML =
+      '<div class="ip-dock-in">' +
+        '<div class="ip-sum" id="ipSum"></div>' +
+        '<div class="ip-prog" id="ipProg" style="display:none"><div class="prog"><i id="ipBar"></i></div><div class="ptext" id="ipText">准备中…</div></div>' +
+        '<div class="ip-dock-btns">' +
+          '<button class="btn ghost" id="ipStop" style="display:none"><svg class="ic sm"><use href="#i-stop"/></svg> 停止安装</button>' +
+          '<button class="btn primary ip-go" id="ipGo"><svg class="ic sm"><use href="#i-download"/></svg> 开始下载</button>' +
+        '</div>' +
+      '</div>';
+  }
+  refreshInstallRows();
+  $('#ipGo').addEventListener('click', startInstallPage);
+  $('#ipStop').addEventListener('click', cancelInstallPage);
+  if (installingNow) markInstallFoot();     /* 下载中重绘（加载器结论回来）也要保持这套按钮态 */
+}
+/* 一张卡片的状态。顺序很重要：已选择的优先（展开中那条要写清装哪个版本）。 */
+function ipCardState(L, c) {
+  if (L === ipLoader) return { cls: 'sel', ok: true, text: '已选择 · ' + (ipBuild || '最新版本') };
+  if (c && c.pending) return { cls: '', ok: true, pending: true, text: '获取中…' };
+  if (c && c.ok) return { cls: '', ok: true, text: '可以添加' };
+  if (c && c.unknown) return { cls: 'off', ok: false, retry: true, text: '查询超时' };
+  return { cls: 'off', ok: false, text: (c && c.why) || '不兼容' };
+}
+function ipCardHtml(L, c) {
+  const st = ipCardState(L, c);
+  const open = ipOpen === L;
+  const chev = open
+    ? '<svg class="ic sm"><use href="#i-chev-d"/></svg>'                       /* 展开 = 向上箭头（CSS 转 180°） */
+    : (st.cls === 'sel' ? '<svg class="ic sm"><use href="#i-check"/></svg>' : '<svg class="ic sm"><use href="#i-chev-d"/></svg>');
+  return '<section class="ip-card ' + st.cls + (open ? ' open' : '') + '" data-l="' + L + '">' +
+    '<button class="ip-ct" data-l="' + L + '"' + (st.cls === 'off' && !st.retry ? ' disabled' : '') + '>' +
+      '<span class="ip-ci"><svg class="ic sm"><use href="' + IP_ICON[L] + '"/></svg></span>' +
+      '<span class="ip-ct-n">' + L + '</span>' +
+      '<span class="ip-ct-s">' + esc(st.text) + '</span>' +
+      '<span class="ip-chev">' + chev + '</span>' +
+    '</button>' +
+    (open ? '<div class="ip-cb" data-fill="' + L + '"></div>' : '') +
+    '</section>';
+}
+function refreshInstallRows() {
+  const box = $('#ipCards');
+  if (!box || !ipVer) return;
+  const compat = compatOf(ipVer);
+  box.innerHTML = IP_LOADERS.map(L => ipCardHtml(L, compat[L])).join('');
+  $$('#ipCards .ip-ct').forEach(b => {
+    if (b.disabled) return;
+    b.addEventListener('click', () => toggleLoaderCard(b.dataset.l));
+  });
+  if (ipOpen) fillLoaderCardBody(ipOpen);
+  updateInstallSum();
+}
+/* 展开 / 收起一张加载器卡片。再点一次已展开的那张 = 收起并回到原版。
+   没结论（获取中 / 查询超时）的先催一次探测，等结果回来再展开。 */
+function toggleLoaderCard(L) {
+  if (!ipVer || installingNow) return;
+  const c = compatOf(ipVer)[L];
+  if (ipOpen === L) {
+    ipOpen = '';
+    if (ipLoader === L) { ipLoader = 'Vanilla'; ipBuild = ''; }
+    refreshInstallRows();
+    return;
+  }
+  if (!c || (!c.ok && !c.pending)) {
+    /* 不兼容 = 点了也没用；查询超时 / 还没查完 = 点一下重试 */
+    if (c && c.unknown) probeInstallLoader(L);
+    return;
+  }
+  ipOpen = L;
+  ipLoader = L;
+  ipBuild = '';
+  refreshInstallRows();
+  probeInstallLoader(L);
+}
+/* 展开的卡片里铺版本列表：缓存有就立刻画，没有就先写「正在获取…」再去取 */
+function fillLoaderCardBody(L) {
+  const host = $('#ipCards .ip-cb[data-fill="' + L.replace(/"/g, '') + '"]');
+  if (!host || !ipVer) return;
+  /* OptiFine 没有「加载器版本」这一说：它自带 HD_U 版本体系，由主进程按该 MC 版本自动取最新 */
+  if (!LOADER_PICKABLE[L]) {
+    host.innerHTML = '<div class="ip-load">' + esc(L) +
+      ' 的版本由它自己的 HD_U 清单决定，安装时自动取该游戏版本可用的最新构建。</div>';
+    return;
+  }
+  const key = L + '@' + ipVer.id;
+  const tk = ipToken;
+  const paint = () => {
+    if (!host.isConnected || ipOpen !== L) return;
+    host.innerHTML = ipListHtml(L, loaderVerCache.get(key));
+    $$('.ip-vr', host).forEach(b => b.addEventListener('click', () => pickInstallBuild(b.dataset.l, b.dataset.v, b.dataset.i)));
+    const rt = $('.ip-retry', host);
+    if (rt) rt.addEventListener('click', () => {
+      loaderVerCache.delete(key);
+      host.innerHTML = '<div class="ip-load">正在获取 ' + esc(L) + ' 版本列表…</div>';
+      fillLoaderCardBody(L);
+    });
+  };
+  if (loaderVerCache.has(key)) { paint(); return; }
+  host.innerHTML = '<div class="ip-load">正在获取 ' + esc(L) + ' 版本列表…</div>';
+  fetchLoaderBuilds(L, ipVer.id).then(r => {
+    if (r && r.ok) loaderVerCache.set(key, r);
+    if (tk === ipToken) paint();
+  });
+}
+/* 一条版本记录右边的注脚：Forge 有构建时间，写「发布于 …」；其余写「稳定版 / 测试版」。 */
+function ipVerNote(it) {
+  const t = fmtStamp(it && it.time);
+  if (t) return '发布于 ' + t;
+  return (it && it.stable === false) ? '测试版' : '稳定版';
+}
+function ipListHtml(L, r) {
+  if (!r || !r.ok || !(r.list || []).length) {
+    const why = (r && (r.why || r.error)) || '版本列表没拿到';
+    return '<div class="ip-load fail">' + esc(why) +
+      ' <button class="btn ghost sm ip-retry" type="button">重试</button></div>';
+  }
+  const list = r.list;
+  const first = list[0];
+  const withTime = !!fmtStamp(first.time);
+  let html = '';
+  if (withTime) {
+    /* PCL 的「最新版」独立一块，下面才是全部版本 */
+    html += '<div class="ip-latest">' +
+      '<div class="ip-latest-v">' + esc(first.v) +
+        '<span class="ip-vtag">' + (first.stable === false ? '最新测试版' : '最新版') + '</span></div>' +
+      '<div class="ip-latest-d">' + esc(ipVerNote(first)) + '</div>' +
+    '</div>';
+  }
+  html += '<div class="ip-all">全部版本（' + list.length + '）</div><div class="ip-vlist">';
+  list.forEach((it, i) => {
+    const sel = ipLoader === L && (ipBuild ? it.v === ipBuild : i === 0);
+    html += '<button type="button" class="ip-vr' + (sel ? ' sel' : '') + '"' +
+      ' data-l="' + L + '" data-v="' + esc(it.v) + '" data-i="' + i + '">' +
+      '<span class="ip-vr-i"><svg class="ic sm"><use href="' + IP_ICON[L] + '"/></svg></span>' +
+      '<span class="ip-vr-n">' + esc(it.v) + '</span>' +
+      '<span class="ip-vr-d">' + esc(ipVerNote(it)) + '</span>' +
+      '<span class="ip-vr-c"><svg class="ic sm"><use href="#i-check"/></svg></span>' +
+    '</button>';
+  });
+  html += '</div>';
+  return html;
+}
+/* 点一条版本 = 记住它（第一行 = 最新，交给主进程按「不指定构建」的老逻辑挑，
+   NeoForge 这种最新可能是预发布的，别把预发布硬塞给用户） */
+function pickInstallBuild(L, ver, idx) {
+  if (!ipVer || installingNow) return;
+  ipLoader = L;
+  ipBuild = (String(idx) === '0') ? '' : ver;
+  refreshInstallRows();
+}
+/* 这个加载器还没结论就先查它（点谁查谁，回来即重绘，不用排在后台那批后面） */
+function probeInstallLoader(L) {
+  if (!ipVer || !LOADER_VERSIONED[L]) return;
+  const c = compatOf(ipVer)[L];
+  if (!c || !c.pending) return;
+  const tk = ipToken;
+  probeOneLoader(L, ipVer.id, false).then(res => {
+    mergeLoaderResult(ipVer.id, L, res);
+    if (tk === ipToken && ipVer) refreshInstallRows();
+  }).catch(() => {});
+}
+function updateInstallSum() {
+  const s = $('#ipSum');
+  if (!s || !ipVer) return;
+  s.innerHTML = '将安装 <b>' + esc(ipVer.id) + '</b>' +
+    (ipLoader === 'Vanilla'
+      ? ' · <b>原版</b>（不装加载器）'
+      : ' + <b>' + esc(ipLoader) + '</b> ' + esc(ipBuild || '最新版本'));
+}
+/* 底部按钮：下载中 = 左「停止安装」右「转入后台」，与旧弹窗同一套语义 */
+function markInstallFoot() {
+  const go = $('#ipGo'), stop = $('#ipStop'), prog = $('#ipProg');
+  if (go) { go.disabled = false; go.className = 'btn ghost ip-go'; go.textContent = '转入后台'; }
+  if (stop) { stop.disabled = false; stop.className = 'btn danger'; stop.style.display = ''; }
+  if (prog) prog.style.display = 'block';
+}
+function resetInstallFoot() {
+  const go = $('#ipGo'), stop = $('#ipStop'), prog = $('#ipProg');
+  if (go) {
+    go.disabled = false; go.className = 'btn primary ip-go';
+    go.innerHTML = '<svg class="ic sm"><use href="#i-download"/></svg> 开始下载';
+  }
+  if (stop) { stop.disabled = false; stop.className = 'btn ghost'; stop.style.display = 'none'; }
+  if (prog) prog.style.display = 'none';
+}
+async function startInstallPage() {
+  if (!ipVer) return;
+  if (installingNow) { closeToBackground(); return; }   /* 下载中再点这个位置 = 转入后台 */
+  dlTaskBegin();   /* 新任务：清掉上一次的浮窗状态 */
+  installingNow = true;
+  markInstallFoot();
+  refreshInstallRows();      /* 下载中不许再改加载器 */
+  setStatus('安装中: ' + ipVer.id, true);
+  try {
+    const nameEl = $('#ipName');
+    const r = await window.lmc.install({
+      id: ipVer.id, loader: ipLoader,
+      customName: nameEl ? nameEl.value.trim() : '',
+      reinstall: ipReinstall,
+      build: ipBuild || undefined
+    });
+    if (!r.started) { toast(r.reason || '任务已存在', 'warn'); installingNow = false; resetInstallFoot(); refreshInstallRows(); }
+  } catch (e) {
+    toast('安装启动失败: ' + e.message, 'error');
+    installingNow = false; resetInstallFoot(); refreshInstallRows();
+  }
+}
+async function cancelInstallPage() {
+  if (!installingNow || !ipVer) return;
+  const btn = $('#ipStop');
+  if (btn) { btn.disabled = true; btn.textContent = '正在停止…'; }
+  try {
+    const r = await window.lmc.installCancel({ id: ipVer.id, loader: ipLoader });
+    if (r && r.ok) return;      /* 等 install:done(cancelled) 回来再收页面 */
+    toast((r && r.error) || '无法停止该任务', 'warn');
+    installingNow = false; resetInstallFoot(); refreshInstallRows();
+  } catch (e) {
+    toast('停止失败: ' + e.message, 'error');
+    installingNow = false; resetInstallFoot(); refreshInstallRows();
+  }
+}
+if (ipPageEl) {
+  $('#ipBack').addEventListener('click', closeInstallPage);
+  $('#ipClose').addEventListener('click', closeInstallPage);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && ipPageEl.style.display !== 'none') { e.preventDefault(); closeInstallPage(); }
+  });
+  /* 点侧栏切页时先收起整页：否则导航高亮变了、画面还停在安装页，看着像「点不动」 */
+  $$('#railNav .rail-btn').forEach(b => b.addEventListener('click', () => closeInstallPage(), true));
+}
+
+/* ⚠️ 这以下是 1.5-snapshot2 之前的「安装弹窗」。界面上已经不再出现（点安装走 openInstallPage 整页），
+   留着是因为 qa/shot-anim.js、qa/shot-speed.js 还在用它出「弹窗形态」的对照图；改动时别把两边弄混。 */
 function openInstallModal(v, reinstall) {
   modalVer = v;
   modalLoader = 'Vanilla';
@@ -2233,7 +2554,8 @@ function dlTaskFinish(ok, errMsg, cancelled, verb) {
    进度事件与速度事件都调它，避免互相覆盖 */
 let mpLast = { stage: '', text: '', percent: 0 };
 function renderMpStatus() {
-  const bar = $('#mpBar'), txt = $('#mpText');
+  /* 安装走整页（#ipBar / #ipText），导出 / 打包等仍是弹窗（#mpBar / #mpText）—— 两种都认 */
+  const bar = $('#mpBar') || $('#ipBar'), txt = $('#mpText') || $('#ipText');
   if (!bar || !txt) return;
   bar.style.width = (mpLast.percent || 0) + '%';
   const sp = fmtSpeed(dlTask.bps);
@@ -2260,14 +2582,19 @@ window.lmc.on('install:done', async (d) => {
   installingNow = false;
   dlTaskFinish(!!d.ok, d.error || '', !!d.cancelled);
   if (d.ok) {
+    closeInstallPage();
     closeModal();
     await scanDir();
     if (d.versionId) selectVersion(d.versionId, true);
   } else if (d.cancelled) {
-    closeModal(); /* 停止安装：关弹窗并刷新（半截目录会以残留徽标显示，下次安装自动归档） */
+    /* 停止安装：收起页面并刷新（半截目录会以残留徽标显示，下次安装自动归档） */
+    closeInstallPage();
+    closeModal();
     await scanDir();
   } else {
     resetModalFoot();
+    resetInstallFoot();
+    refreshInstallRows();     /* 失败后放开加载器行，能改选再试 */
   }
 });
 

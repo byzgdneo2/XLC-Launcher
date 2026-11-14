@@ -1649,6 +1649,20 @@
     </div>
     <div class="mvp-body" id="mvBody"></div>
   </div>
+  <!-- 安装版本页（PCL 式）：版本名 + 加载器行（Forge / NeoForge / Fabric / Quilt / OptiFine）+ 开始下载。
+       以前是个 520px 的弹窗（一列单选 + 立刻开始），现在和模组版本页同一种形状：整页盖在内容区上。 -->
+  <div class="mvpage" id="ipPage" style="display:none">
+    <div class="mvp-head">
+      <button class="mvp-back" id="ipBack" title="返回"><svg class="ic"><use href="#i-chev-d"/></svg></button>
+      <div class="mvp-headtx">
+        <div class="mvp-title" id="ipTitle">安装版本</div>
+        <div class="mvp-sub" id="ipSub">正在读取…</div>
+      </div>
+      <button class="mvp-close" id="ipClose" title="关闭"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="mvp-body" id="ipBody"></div>
+    <div class="ip-dock" id="ipDock"></div>
+  </div>
 
   <div id="toasts"></div>
 </div>

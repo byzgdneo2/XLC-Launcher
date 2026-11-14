@@ -1,5 +1,7 @@
 # XLC Launcher
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
+
 XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，单文件便携运行，开箱即用。
 
 ## 功能一览
@@ -28,15 +30,15 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 
 | 版本 | 文件 | 说明 |
 | --- | --- | --- |
-| 1.5-snapshot1 | `XLC-Launcher-1.5-snapshot1-portable.exe` | 快照版（最新）：装 MOD 选版本改成一整页（项目卡 / 游戏版本条 / 加载器分组 / 版本列表，照 PCL 的样子），页面顶部列出必需前置 MOD 并可点进去装（Iris → Sodium，最多 5 层）；CurseForge 的依赖也读出来了；下载游戏的版本行新增「详情」直通中文 Minecraft Wiki。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4 | `XLC-Launcher-1.4-portable.exe` | 正式版（最新正式版）：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新改为官网优先下载、GitHub 兜底，两条都不通会直接提示下载失败。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-rc1 | `XLC-Launcher-1.4-rc1-portable.exe` | 候选版：账户页皮肤预览活了 —— 坐下点一下画面小人会 Q 弹（压扁再弹回来）、连点 4 次触发彩蛋：转圈 + 放 BGM + 跟着鼓点每拍弹一下；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-pre1 | `XLC-Launcher-1.4-pre1-portable.exe` | 预发布：1.4 进入预发布阶段，这一版没有新功能，全在收口 —— 账户页「默认皮肤」两处说法统一（以前一边写史蒂夫、一边写按 UUID 分配）；插件安装补 CSP 前校验入口仍在解包目录内、整合包下载临时文件名只取 basename；账户页皮肤预览遇到坏图不再每帧重试解码，图片缓存加 32 条上限。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-snapshot6 | `XLC-Launcher-1.4-snapshot6-portable.exe` | 上一快照：账户页的皮肤预览换成 3D —— 皮肤贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），侧面背面都能看、明暗跟着角度走；鼠标在启动器窗口里移动时头会跟着转（左右 ±46°、上下 ±26°，移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行就换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认）。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-snapshot5 | `XLC-Launcher-1.4-snapshot5-portable.exe` | 上一快照：整合包导入实测修复 —— 分段下载不再永久卡死（本段收满即走 + 25 秒空闲超时）、Fabric / Quilt 加载器 jar 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-snapshot4 | `XLC-Launcher-1.4-snapshot4-portable.exe` | 上一快照：下载页皮肤改成三种来源（皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤）；皮肤库安全收口 —— 按 URL 导入拦内网/回环地址、改名补路径校验。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-snapshot3 | `XLC-Launcher-1.4-snapshot3-portable.exe` | 上一快照：下载页新增「皮肤」分类（按正版玩家名抓 Mojang 官方皮肤）、账户设置新增皮肤库与六种动作预览；修复存档区块预览只能画成正方形；更新公告只留当前版本。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
-| 1.4-snapshot2 | `XLC-Launcher-1.4-snapshot2-portable.exe` | 上一快照：修中文名导致账户列表清空、下载卡 94%、整合包装不进实例、Fabric 实例缺加载器启动报 KnotClient；新增「补全文件」；接管系统代理。配套插件 `XLC-Plugin-download-rescue-2.0.1.zip`（同一发行版附件） |
+| 1.5-snapshot2 | `XLC-Launcher-1.5-snapshot2-portable.exe` | 快照版（最新）：下载游戏的「安装」也改成一整页，布局照 PCL —— 顶上版本名一栏（改名就是装成自定义实例），下面一叠加载器卡片（Forge / NeoForge / Fabric / Quilt / OptiFine）各自写着「获取中… / 可以添加 / 不兼容的原因」，点开哪张卡片就在卡片里直接铺出全部版本（最新版单独一块 + 每个版本带「发布于 …」或稳定版标记，一次只展开一张），底部「开始下载」固定在窗口下沿，一张都不展开就是原版；下载中按钮变「停止安装 / 转入后台」，进度与速度留在页面里。同线的 1.5-snapshot1 已带：模组版本页整页化 + 前置 MOD 钻取、CurseForge 依赖、下载页版本行「详情」直通中文 Minecraft Wiki |
+| 1.4 | `XLC-Launcher-1.4-portable.exe` | 正式版（最新正式版）：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新改为官网优先下载、GitHub 兜底，两条都不通会直接提示下载失败 |
+| 1.4-rc1 | `XLC-Launcher-1.4-rc1-portable.exe` | 候选版：账户页皮肤预览活了 —— 坐下点一下画面小人会 Q 弹（压扁再弹回来）、连点 4 次触发彩蛋：转圈 + 放 BGM + 跟着鼓点每拍弹一下；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底 |
+| 1.4-pre1 | `XLC-Launcher-1.4-pre1-portable.exe` | 预发布：1.4 进入预发布阶段，这一版没有新功能，全在收口 —— 账户页「默认皮肤」两处说法统一（以前一边写史蒂夫、一边写按 UUID 分配）；插件安装补 CSP 前校验入口仍在解包目录内、整合包下载临时文件名只取 basename；账户页皮肤预览遇到坏图不再每帧重试解码，图片缓存加 32 条上限 |
+| 1.4-snapshot6 | `XLC-Launcher-1.4-snapshot6-portable.exe` | 上一快照：账户页的皮肤预览换成 3D —— 皮肤贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），侧面背面都能看、明暗跟着角度走；鼠标在启动器窗口里移动时头会跟着转（左右 ±46°、上下 ±26°，移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行就换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认） |
+| 1.4-snapshot5 | `XLC-Launcher-1.4-snapshot5-portable.exe` | 上一快照：整合包导入实测修复 —— 分段下载不再永久卡死（本段收满即走 + 25 秒空闲超时）、Fabric / Quilt 加载器 jar 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名 |
+| 1.4-snapshot4 | `XLC-Launcher-1.4-snapshot4-portable.exe` | 上一快照：下载页皮肤改成三种来源（皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤）；皮肤库安全收口 —— 按 URL 导入拦内网/回环地址、改名补路径校验 |
+| 1.4-snapshot3 | `XLC-Launcher-1.4-snapshot3-portable.exe` | 上一快照：下载页新增「皮肤」分类（按正版玩家名抓 Mojang 官方皮肤）、账户设置新增皮肤库与六种动作预览；修复存档区块预览只能画成正方形；更新公告只留当前版本 |
+| 1.4-snapshot2 | `XLC-Launcher-1.4-snapshot2-portable.exe` | 上一快照：修中文名导致账户列表清空、下载卡 94%、整合包装不进实例、Fabric 实例缺加载器启动报 KnotClient；新增「补全文件」；接管系统代理 |
 | 1.4-snapshot1 | `XLC-Launcher-1.4-snapshot1-portable.exe` | 上一快照：功能开关搬进设置项，装上「下载恢复器」插件（`XLC-Plugin-download-rescue-2.0.0.zip`）就能把下架的下载页放回来 |
 | 1.3.1 | `XLC-Launcher-1.3.1-portable.exe` | 正式版，建议日常使用：默认皮肤换成游戏里真正的史蒂夫贴图 |
 | 1.3 | `XLC-Launcher-1.3-portable.exe` | 上一版正式版，需要回退时使用 |
