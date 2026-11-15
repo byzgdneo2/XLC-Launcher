@@ -158,6 +158,7 @@ try {
    → **1.4（正式版：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新的下载通道改为官网优先、GitHub 兜底，两条都不通直接提示下载失败）**
    → **1.5-snapshot1（1.5 首个快照：装 MOD 选版本改成一整页（项目卡 / 游戏版本条 / 加载器分组 / 版本列表，照 PCL 的样子）+ 页面顶部列出必需前置 MOD 并可钻取（Iris → Sodium，最多 5 层）；CurseForge 的依赖也读出来了（files[].dependencies 里 relationType 3），CF 版本列表翻页取 300 个，老游戏版本不再消失；下载游戏的版本行新增「详情」，一点开中文 Minecraft Wiki 的对应版本页；修复详情弹窗里多行图片标签退化成满屏源码、YouTube 嵌入撑出横向滚动条；官网改成分享码访问，更新检测 / 版本回退 / 正式版更新的官网通道统一带码，不再撞 403）
    → **1.5-snapshot2（下载游戏的「安装」也改成整页，照 PCL 的安装页：顶上版本名一栏（改名就是装成自定义实例），下面一列加载器 Forge / NeoForge / Fabric / Quilt / OptiFine，每行右边写清「获取中… / 可以添加 / 不兼容的原因」，点开哪张卡片就在卡片里直接铺出该加载器的全部版本（最上面单独一块「最新版」，下面「全部版本（N）」逐条：Forge 带「发布于 年/月/日 时:分」，Fabric / NeoForge / Quilt 标「稳定版 / 测试版」，同一时间只展开一张），底部「开始下载」固定在窗口下沿；一张卡片都不展开就是原版。下载中按钮变「停止安装 / 转入后台」，进度与速度留在页面里）**
+   → **1.5-snapshot3（下载页的整合包 / 资源包 / 光影包 / 数据包点「安装」不再直接抓最新版，先进一整页的版本选择（项目卡 + 按游戏版本筛的标签条 + 按 MC 版本折叠的文件列表，进来全收起、点哪个版本装哪个；按钮文案按类型变：安装整合包 / 安装资源包 / 安装光影 / 装入存档，数据包多一条「装进哪个存档」提示；MOD 那一页仍按加载器分组）+ 修下载链：下载页装整合包碰上 CDN 限流（429/503）或代理抖动时不再一路重试到整包失败、最后在 versions 里留个空壳（界面看不到、文件夹里也没有）—— 限流改成退避等待 + 分段立刻降级单线程、临时文件被残留占住能换名重下、装失败清掉空目录；另修「代理抖一次就把该域名永久拉黑成直连」导致 cdn.modrinth.com 连挂 12 次 fetch failed，现在直连兜底成功即恢复走代理、双死才冷却 60 秒，报错也翻成人话）**
    排序规则见 verParts/compareVer：版本号拆成「目标版本 + 阶段」两段比。
    早期 0 系列的预发布（Beta1.0 / Pre1 / RC1）目标版本算 0，任何正式版都盖过它们 ——
    所以 1.0 会让 RC1/Pre/Beta 用户收到更新；而带目标版本号的预发布（1.1-snapshot1）
@@ -166,7 +167,7 @@ try {
    —— 所以 1.1-pre1 比 1.1-snapshot2 新，装快照版的用户能收到这次更新。
    ⚠️ 1.0 老客户端只认「正式版形态」（带 snapshot/beta/pre/rc 的一律当 0 系列），
    要覆盖所有用户只能发这种纯版本号形态。 */
-const APP_VERSION = '1.5-snapshot2';
+const APP_VERSION = '1.5-snapshot3';
 
 /* ---------------- 诊断：启动器崩溃捕获 ---------------- */
 /* 同 logLine：自测进程的诊断记录也写到临时目录，不碰用户数据目录里的 boot.json / 崩溃记录 */
@@ -1415,6 +1416,44 @@ function logLine(s) {
 function toast(msg, type) { logLine('[toast:' + (type || 'ok') + '] ' + msg); send('app:toast', { msg, type: type || 'ok' }); }
 
 /* ---------------- HTTP ---------------- */
+/* undici 的「fetch failed」把真正原因全藏在 e.cause.code 里（ECONNREFUSED / ETIMEDOUT / ENOTFOUND …），
+   toast 与日志里只剩干巴巴一句 fetch failed，用户完全无从下手。这里翻译成人话。
+   2026-11-15 修：这两个函数必须放在「检测到代理」之外 —— 代理跑 TUN / PAC 模式时 detectProxyUrl()
+   返回空，整块代理接管都不执行，错误就会原样冒到 toast（用户反馈「开着代理还是提示安装失败」）。 */
+function netCauseText(e) {
+  try {
+    const c = (e && e.cause) || e;
+    const s = String((c && c.code) || (c && c.message) || '');
+    if (/ECONNREFUSED/i.test(s)) return '连接被拒绝（代理/VPN 没开，或端口已经换了？）';
+    if (/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|connect timeout/i.test(s)) return '连接超时（直连被网络阻断，试试开代理/VPN）';
+    if (/ENOTFOUND|EAI_AGAIN/i.test(s)) return '域名解析失败（DNS 异常，检查网络）';
+    if (/ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up/i.test(s)) return '连接被重置（网络不稳定）';
+    if (/CERT|SSL|TLS/i.test(s)) return '证书校验失败（检查系统时间或代理劫持）';
+    return '';
+  } catch (_) { return ''; }
+}
+function enrichNetErr(e, note) {
+  try {
+    const t = netCauseText(e);
+    if (!t) return e;
+    const extra = (note ? note + '：' : '') + t;
+    if (String(e.message) === 'fetch failed') return new Error('网络连接失败（' + extra + '）');
+    if (!String(e.message).includes(t)) return new Error(e.message + '（' + extra + '）');
+    return e;
+  } catch (_) { return e; }
+}
+/* 没有代理接管（没检测到代理 / 接管失败）时，给全局 fetch 套一层「只翻译不重试」的壳：
+   请求路径完全不动，只是把 undici 的 fetch failed 换成能看懂的原因。 */
+function installNetErrTranslator() {
+  if (globalThis.__xlcErrTranslator) return;
+  const nativeFetchPlain = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    try { return await nativeFetchPlain(input, init); }
+    catch (e) { throw enrichNetErr(e); }
+  };
+  globalThis.__xlcErrTranslator = true;
+}
+
 /* 系统代理接管（下载链路最关键的一处环境差异）
    Node 自带的 fetch（undici）**不读系统代理**：用户开着 Clash / v2ray 时浏览器一切正常，
    启动器里的清单、资源文件、MOD 却全是「连接超时」，表现就是进度停住不动（资源阶段 = 94%）。
@@ -1499,21 +1538,43 @@ if (PROXY_URL) {
       });
       /* 代理是「配了但已经失效」（常见：Clash 关了，系统代理还留着）时，所有请求都会连不上。
          这里兜一层：代理侧网络错误就改直连重试一次（只对无 body 的 GET/HEAD，避免请求体被消费），
-         别让一个死代理把用户彻底堵死。 */
-      const deadProxyHosts = new Set();
+         别让一个死代理把用户彻底堵死。
+         2026-11-14 修：以前 deadProxyHosts 是 Set 永久缓存 —— 代理抖动失败一次，这个 host
+         从此永远直连。对 cdn.modrinth.com 这种境内直连必死（SNI 阻断超时）的服务器，
+         等于一次抖动就把整条下载链判了死刑：实测装整合包 12 次请求全部 fetch failed，
+         28 秒全军覆没，toast 只有干巴巴的「fetch failed」。而且 mcimirror 的文件路径是
+         302 跳回 cdn.modrinth.com 本尊（假镜像），跟随重定向后照样落进直连黑洞。
+         改成：直连兜底成功 → 清掉记录（下次仍先走代理）；直连也失败 → 该 host 冷却 60s，
+         冷却期内代理失败就直接报错（不再陪等 10s+ 的直连超时），60s 后自动重试代理。 */
+      const DEAD_PROXY_TTL = 60000;
+      const deadProxyHosts = new Map();   /* host → 直连兜底失败的冷却到期时间戳 */
       globalThis.fetch = async (input, init) => {
         const method = String((init && init.method) || 'GET').toUpperCase();
         try {
           return await proxyFetch(input, init, 0);
         } catch (e) {
-          if ((method !== 'GET' && method !== 'HEAD') || (init && init.body)) throw e;
+          if ((method !== 'GET' && method !== 'HEAD') || (init && init.body)) throw enrichNetErr(e);
           let host = '';
           try { host = new URL(typeof input === 'string' ? input : (input && input.url) || '').host; } catch (_) {}
-          if (!deadProxyHosts.has(host)) {
-            deadProxyHosts.add(host);
-            logLine('[net] 代理连不上（' + host + '），本次改直连: ' + (e && e.message));
+          if (host && deadProxyHosts.get(host) > Date.now()) {
+            /* 直连兜底刚失败过（冷却中）：别再陪等 10s+ 的直连超时，直接报人话 */
+            throw enrichNetErr(e, '代理');
           }
-          return nativeFetch(input, init);
+          if (host && !deadProxyHosts.has(host)) {
+            logLine('[net] 代理连不上（' + host + '），改直连试一次: ' + (e && e.message));
+          }
+          deadProxyHosts.delete(host);
+          try {
+            return await nativeFetch(input, init);
+          } catch (e2) {
+            if (host) {
+              deadProxyHosts.set(host, Date.now() + DEAD_PROXY_TTL);
+              logLine('[net] 代理与直连都不通（' + host + '），该源冷却 60 秒 · 直连原因: ' + netCauseText(e2) + ' · 代理侧: ' + (e && e.message));
+            }
+            const me = enrichNetErr(e, '代理');
+            const de = enrichNetErr(e2, '直连');
+            throw new Error('代理与直连均失败：' + de.message + '（代理侧：' + me.message + '）');
+          }
         }
       };
       logLine('[net] 已接管系统代理: ' + PROXY_URL.replace(/\/\/[^@/]*@/, '//***@'));
@@ -1522,7 +1583,13 @@ if (PROXY_URL) {
     }
   } catch (e) {
     logLine('[net] 代理接管失败，改走直连: ' + e.message);
+    installNetErrTranslator();
   }
+} else {
+  /* 没检测到系统代理（代理跑 TUN / PAC 模式，或者压根没开）：
+     请求路径完全不动，只给 undici 的错误补一段人话，别再让 toast 只剩「fetch failed」。 */
+  installNetErrTranslator();
+  logLine('[net] 未检测到系统代理，直连模式（错误会翻译成人话）');
 }
 const UA_STR = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 XLC/' + APP_VERSION;
 async function fetchBuf(url, signal) {
@@ -1551,9 +1618,40 @@ function wsErrGuard(ws) {
    整个池会永远吊在 reader.read() 上 —— 用户看到的就是「进度停在 94% 不动」。
    连续这么多毫秒收不到任何字节就主动掐断，交给 downloadTo 换源重试。 */
 const DL_IDLE_MS = (SMOKE_EARLY && parseInt(process.env.XLC_DL_IDLE_MS, 10)) || 25000;
+/* 下载源限流（429 / 503）：这是「现在别太快」，不是「这个文件坏了」。
+   实测 16 段并发打 BMCLAPI 会直接被 429 顶回来，然后换源到官方 CDN 又常常更慢 ——
+   于是整包安装失败、versions 里只留一个空目录（用户看到的就是「装完列表里没有、文件夹里也没有」）。
+   这里做两件事：① 单流遇到限流退避重试，别急着换源；② 记下这个 host 冷却 60 秒，
+   冷却期内直接跳过 16 段并发（多线程逐个文件都要探一次 Range，纯粹是继续挨 429）。 */
+const HOST_429 = new Map();                 /* host → 冷却到期时间戳 */
+const THROTTLE_COOL_MS = 60000;
+function isThrottleStatus(st) { return st === 429 || st === 503; }
+function hostThrottled(u) {
+  const until = HOST_429.get(hostOf(u));
+  return !!(until && until > Date.now());
+}
+function markThrottled(u, retryAfterSec) {
+  const ms = Math.max(30000, Math.min(300000, (Number(retryAfterSec) || 0) * 1000 || THROTTLE_COOL_MS));
+  HOST_429.set(hostOf(u), Date.now() + ms);
+}
+/* 临时文件路径：默认 dest + '.xlc-tmp'。这个位置可能被上次中断的残留占着（只读 / 目录 /
+   别的进程还开着），此时 open('w') 会直接 EPERM（实测换源重试就是死在这一步）。
+   占用清不掉就退到一个带 pid + 随机后缀的名字，绝不让一个残留文件把整次安装打死。 */
+async function tmpPathFor(dest) {
+  const p = dest + '.xlc-tmp';
+  try {
+    await fsp.rm(p, { force: true, recursive: true });
+    return p;
+  } catch (_) {
+    return dest + '.xlc-tmp-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
+  }
+}
+async function dropTmp(p) {
+  try { await fsp.rm(p, { force: true, recursive: true }); } catch (_) {}
+}
 async function downloadSingle(url, dest, onProgress, signal, opts) {
   await fsp.mkdir(path.dirname(dest), { recursive: true });
-  const tmp = dest + '.xlc-tmp';
+  const tmp = await tmpPathFor(dest);
   /* 两级 abort：外部 signal（用户点「停止安装」）与内部停滞定时器都走这个 controller，
      用 stalled 标记区分，好让上层知道是「卡死」而不是「用户取消」。 */
   const ac = new AbortController();
@@ -1573,15 +1671,31 @@ async function downloadSingle(url, dest, onProgress, signal, opts) {
     return e;
   };
   touch();
-  let res;
-  try {
-    res = await fetch(url, { headers: { 'User-Agent': UA_STR }, redirect: 'follow', signal: ac.signal });
-  } catch (e) {
+  let res = null;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(url, { headers: { 'User-Agent': UA_STR }, redirect: 'follow', signal: ac.signal });
+    } catch (e) {
+      detach();
+      if (stalled && !(signal && signal.aborted)) throw stalledErr();
+      throw e;
+    }
+    if (res.ok) break;
+    if (isThrottleStatus(res.status) && attempt < 2) {
+      /* 限流：按 Retry-After（没有就 0.8s / 1.6s 翻倍）等一会儿原地重试，别马上换源 */
+      const ra = parseFloat(res.headers.get('retry-after') || '0');
+      markThrottled(url, ra);
+      try { await res.body.cancel(); } catch (_) {}
+      clearIdle();
+      const wait = ra > 0 ? Math.min(ra * 1000, 8000) : 800 * Math.pow(2, attempt);
+      await sleepMs(wait);
+      if (signal && signal.aborted) { detach(); throw new Error('安装已被用户取消'); }
+      touch();
+      continue;
+    }
     detach();
-    if (stalled && !(signal && signal.aborted)) throw stalledErr();
-    throw e;
+    throw new Error('HTTP ' + res.status + ' · ' + url);
   }
-  if (!res.ok) { detach(); throw new Error('HTTP ' + res.status + ' · ' + url); }
   const total = parseInt(res.headers.get('content-length') || '0', 10);
   const ws = fs.createWriteStream(tmp);
   const guard = wsErrGuard(ws);
@@ -1604,14 +1718,17 @@ async function downloadSingle(url, dest, onProgress, signal, opts) {
     await guard.wait(new Promise(r => ws.end(r)));
   } catch (e) {
     try { ws.destroy(); } catch (_) {}
-    try { await fsp.unlink(tmp); } catch (_) {}
+    /* 等 write stream 真正关掉再删：Windows 上文件还开着时 unlink 会失败，
+       留下的 .xlc-tmp 会让下一次（可能是换源后的那次）open('w') 直接 EPERM */
+    await new Promise(r => { try { ws.once('close', r); setTimeout(r, 500); } catch (_) { r(); } });
+    await dropTmp(tmp);
     detach();
     if (stalled && !(signal && signal.aborted)) throw stalledErr();
     throw e;
   }
   detach();
   if (total && got !== total && !(opts && opts.noLenCheck)) {
-    try { await fsp.unlink(tmp); } catch (_) {}
+    await dropTmp(tmp);
     throw new Error('下载不完整 ' + got + '/' + total);
   }
   await fsp.rename(tmp, dest);
@@ -1627,7 +1744,11 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
   /* 1. Range 支持探测 */
   const probe = await fetch(url, { headers: { 'User-Agent': UA_STR, Range: 'bytes=0-0' }, redirect: 'follow', signal });
   try { await probe.body.cancel(); } catch (_) {}
-  if (probe.status !== 206) throw new Error('RANGE_UNSUPPORTED (HTTP ' + probe.status + ')');
+  if (probe.status !== 206) {
+    /* 探测就被限流：记一笔，接下来一分钟内其他文件直接走单流，别再挨个撞 429 */
+    if (isThrottleStatus(probe.status)) markThrottled(url, parseFloat(probe.headers.get('retry-after') || '0'));
+    throw new Error('RANGE_UNSUPPORTED (HTTP ' + probe.status + ')');
+  }
   const cm = (probe.headers.get('content-range') || '').match(/\/(\d+)\s*$/);
   if (!cm) throw new Error('RANGE_UNSUPPORTED (no content-range)');
   const total = parseInt(cm[1], 10);
@@ -1637,8 +1758,9 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
   const segCount = Math.max(1, Math.min(wantThreads, Math.ceil(total / MT_SEG_BYTES)));
   const segSize = Math.ceil(total / segCount);
   await fsp.mkdir(path.dirname(dest), { recursive: true });
-  /* 预分配临时文件（.xlc-tmp），全部段写完并校验通过后才改名到最终位置 */
-  const tmp = dest + '.xlc-tmp';
+  /* 预分配临时文件（.xlc-tmp），全部段写完并校验通过后才改名到最终位置。
+     路径可能被上次残留占着 → tmpPathFor 会清掉，清不掉就换唯一名字（否则 open 直接 EPERM）。 */
+  const tmp = await tmpPathFor(dest);
   const fd = await fsp.open(tmp, 'w');
   await fd.truncate(total);
   await fd.close();
@@ -1686,6 +1808,14 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
         touch();
         const res = await fetch(url, { headers: { 'User-Agent': UA_STR, Range: 'bytes=' + (start + got) + '-' + end }, redirect: 'follow', signal: ac.signal });
         /* 分段必须拿到 206：若服务器无视 Range 回 200，body 从 0 开始，写进分段会损坏文件 */
+        if (isThrottleStatus(res.status)) {
+          /* 限流：16 条连接再各重试 3 次只会继续挨 429（还拖慢整个文件）。
+             立刻交给上层回退单流，并把这个 host 冷却一会儿。 */
+          markThrottled(url, parseFloat(res.headers.get('retry-after') || '0'));
+          const te = new Error('分段 ' + i + ' 被限流（HTTP ' + res.status + '）');
+          te.throttled = true;
+          throw te;
+        }
         if (res.status !== 206) throw new Error('RANGE_UNSUPPORTED (HTTP ' + res.status + ' seg ' + i + ')');
         ws = fs.createWriteStream(tmp, { flags: 'r+', start: start + got });
         guard = wsErrGuard(ws);
@@ -1730,6 +1860,9 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
           try { await fetchSeg(i); return; }
           catch (e) {
             if (aborted || (signal && signal.aborted)) throw new Error('aborted');
+            /* 限流不是「这条连接死了」：别在 16 条连接上各重试 3 次，
+               直接整体交给 downloadBig 回退单流（单流还会按 Retry-After 退避） */
+            if (e.throttled) throw e;
             /* 停滞说明这条连接已经死了：再试一次（带 Range 从断点续），
                两条连接都停滞就交给 downloadBig 回退单流 —— 没必要在这里耗满 3×25 秒 */
             if (e.stalled && a >= 1) throw new Error('分段 ' + i + ' 连续停滞: ' + e.message);
@@ -1747,15 +1880,24 @@ async function downloadMultiThread(url, dest, onProgress, signal) {
     await fsp.rename(tmp, dest);
     return gotAll;
   } catch (e) {
-    /* 失败/取消：清掉临时文件，绝不在最终位置留半截文件 */
+    /* 失败/取消：先让还在跑的段停手（它们的 finally 会把写流关掉），再清临时文件 ——
+       直接 unlink 时别的段可能还开着这个文件，Windows 上删不掉就留下一个占位残留，
+       下一次（多半是换源那一次）open('w') 就 EPERM，整个安装白装。 */
     if (signal) signal.removeEventListener('abort', onAbort);
-    try { await fsp.unlink(tmp); } catch (_) {}
+    aborted = true;
+    await new Promise(r => setTimeout(r, 80));
+    await dropTmp(tmp);
     throw e;
   }
 }
 
 /* 对外入口：先试多线程，失败自动回退单流（全站生效：客户端 jar / Forge 安装器 / CF 下载等） */
 async function downloadBig(url, dest, onProgress, signal, opts) {
+  /* 这个 host 刚被限流过（60 秒内）：别再上 16 段并发去撞 429，直接单流 + 退避 */
+  if (hostThrottled(url)) {
+    logLine('[download] 该源刚被限流，本文件改走单流: ' + String(url).slice(0, 110));
+    return downloadSingle(url, dest, onProgress, signal, opts);
+  }
   try {
     return await downloadMultiThread(url, dest, onProgress, signal);
   } catch (e) {
@@ -1798,6 +1940,20 @@ if (SMOKE_EARLY && process.env.XLC_SMOKE_MANIFEST_URL) {
   MANIFEST_URL.official = String(process.env.XLC_SMOKE_MANIFEST_URL);
   MANIFEST_URL.bmclapi = String(process.env.XLC_SMOKE_MANIFEST_URL);
 }
+/* 同款冒烟开关：加载器元数据与 maven 仓库。装带 Fabric 的整合包要先装加载器，
+   这两处不打桩就只能真连 meta.fabricmc.net（境内常见 1KB/s），离线更跑不了。 */
+const FABRIC_META_BASE = (SMOKE_EARLY && process.env.XLC_SMOKE_LOADER_META)
+  ? String(process.env.XLC_SMOKE_LOADER_META).replace(/\/+$/, '')
+  : 'https://meta.fabricmc.net/v2';
+const QUILT_META_BASE = (SMOKE_EARLY && process.env.XLC_SMOKE_LOADER_META)
+  ? String(process.env.XLC_SMOKE_LOADER_META).replace(/\/+$/, '').replace(/\/v2$/, '') + '/v3'
+  : 'https://meta.quiltmc.org/v3';
+const MAVEN_FABRIC = (SMOKE_EARLY && process.env.XLC_SMOKE_MAVEN)
+  ? String(process.env.XLC_SMOKE_MAVEN).replace(/\/+$/, '') + '/'
+  : 'https://maven.fabricmc.net/';
+const MAVEN_QUILT = (SMOKE_EARLY && process.env.XLC_SMOKE_MAVEN)
+  ? String(process.env.XLC_SMOKE_MAVEN).replace(/\/+$/, '') + '/'
+  : 'https://maven.quiltmc.org/repository/release/';
 
 function sha1(buf) { return crypto.createHash('sha1').update(buf).digest('hex'); }
 /* 大文件算 SHA1 走流式，别把整个 client.jar 读进内存 */
@@ -1903,6 +2059,22 @@ async function downloadTo(url, dest, expectSha1, signal, sizeHint) {
           String(tries[i]).slice(0, 100) + ' · ' + e.message);
         await sleepMs(600 * (i + 1));
       }
+    }
+  }
+  /* 限流到最后一刻：把「再试也没用」的原因说清楚，别让用户以为文件坏了 */
+  if (lastErr && /HTTP (429|503)/.test(String(lastErr.message || ''))) {
+    const te = new Error(lastErr.message + '（下载源限流，休息一会儿重试即可）');
+    te.throttled = true;
+    throw te;
+  }
+  /* 所有源都试完了：网络类错误（fetch failed）翻成人话再抛。
+     undici 的真因在 e.cause.code，原样甩出去用户只会看到一句 fetch failed。 */
+  if (lastErr) {
+    const t = netCauseText(lastErr);
+    if (t && !String(lastErr.message || '').includes(t)) {
+      const ne = new Error(String(lastErr.message || '下载失败') + '（' + t + '）');
+      ne.cause = lastErr;
+      throw ne;
     }
   }
   throw lastErr || new Error('下载失败: ' + url);
@@ -2105,6 +2277,23 @@ function prepareInstallSlot(gd, id, force) {
   toast('发现「' + id + '」上次未安装完成的残留目录，已自动归档（' + bak + '），正在重新安装', 'warn');
 }
 
+/* 安装失败后清掉「只建了目录、什么都没落」的空实例目录。
+   留着它，版本列表里看不到（没有版本 json）、文件夹里却有个空壳 ——
+   用户看到的就是「下载完了，列表里没有、文件夹里也没有」，完全判断不出是失败还是没装。 */
+async function pruneEmptyVersionDir(dir, id) {
+  try {
+    if (fs.existsSync(path.join(dir, String(id) + '.json'))) return;  /* 有版本 json = 有效实例，别动 */
+    const items = await fsp.readdir(dir);
+    for (const it of items) {
+      const p = path.join(dir, it);
+      const st = await fsp.stat(p);
+      if (st.isFile()) return;                                        /* 有落盘文件就留着，交给「残留目录」流程 */
+      if (st.isDirectory() && (await fsp.readdir(p)).length) return;
+    }
+    await fsp.rm(dir, { recursive: true, force: true });
+    logLine('[install] 清理安装失败留下的空目录: ' + dir);
+  } catch (_) { /* 删不掉也不影响安装结果 */ }
+}
 /* ---------------- 安装：原版 ---------------- */
 /* opt.noAssets: 跳过资源文件与 natives（加载器安装预热用，启动前不需要）
  * cancelKey + signal: 前者是阶段/worker 边界的检查点，后者直接打断进行中的 fetch（「停止安装」立即生效） */
@@ -2206,7 +2395,7 @@ async function installVanillaFiles(meta, gameId, opt, cancelKey, signal) {
 async function installFabricLike(gameVer, kind, customName, opt) {
   const gd = config.gameDir;
   const meta = await findInManifest(gameVer);
-  const api = kind === 'fabric' ? 'https://meta.fabricmc.net/v2/versions/loader/' : 'https://meta.quiltmc.org/v3/versions/loader/';
+  const api = (kind === 'fabric' ? FABRIC_META_BASE : QUILT_META_BASE) + '/versions/loader/';
   setStatus('获取 ' + (kind === 'fabric' ? 'Fabric' : 'Quilt') + ' 元数据…', true);
   send('install:progress', { stage: 'loader', percent: 4, text: '获取加载器元数据' });
 
@@ -2233,7 +2422,7 @@ async function installFabricLike(gameVer, kind, customName, opt) {
   const loaderVer = pick.loader.version;
   const versionId = sanitizeVersionId(customName) || (gameVer + '-' + kind + '-' + loaderVer);
   if (instanceStateOf(gd, versionId).state !== 'none') prepareInstallSlot(gd, versionId, !!(opt && opt.force));
-  const mavenBase = kind === 'fabric' ? 'https://maven.fabricmc.net/' : 'https://maven.quiltmc.org/repository/release/';
+  const mavenBase = kind === 'fabric' ? MAVEN_FABRIC : MAVEN_QUILT;
 
   const libs = [];
   const seenLib = new Set();
@@ -2273,7 +2462,13 @@ async function installFabricLike(gameVer, kind, customName, opt) {
 
   // 父版本资源必须齐全
   chkCancel(opt && opt.cancelKey);
-  await installVanillaFiles(meta, gameVer, {}, opt && opt.cancelKey, opt && opt.signal);
+  try {
+    await installVanillaFiles(meta, gameVer, {}, opt && opt.cancelKey, opt && opt.signal);
+  } catch (e) {
+    /* 原版文件没下全 = 这个实例根本起不来；把只建了一半的空目录收掉，别留空壳 */
+    await pruneEmptyVersionDir(path.join(gd, 'versions', gameVer), gameVer);
+    throw e;
+  }
 
   const vd = path.join(gd, 'versions', versionId);
   await fsp.mkdir(vd, { recursive: true });
@@ -2852,9 +3047,16 @@ async function runInstall(payload, cancelKey, signal) {
 }
 
 /* ---------------- Modrinth 在线资源（MOD / 整合包） ---------------- */
-const MODRINTH_API = 'https://api.modrinth.com/v2';
+let MODRINTH_API = 'https://api.modrinth.com/v2';
 /* 智能双源：尽量官方源；官方超时/失败自动切镜像（MCIM），切换后 10 分钟内优先镜像 */
-const MR_MIRROR = 'https://mod.mcimirror.top';
+let MR_MIRROR = 'https://mod.mcimirror.top';
+/* 冒烟/回归专用：把 Modrinth 接口也指到本地假服务器（与 XLC_SMOKE_MANIFEST_URL 同一思路）。
+   没有它，「下载页 → 整合包 → 安装」这条链路要么真连外网下几百 MB，要么根本没法离线复现问题。 */
+if (SMOKE_EARLY && process.env.XLC_SMOKE_MR_API) {
+  const mrBase = String(process.env.XLC_SMOKE_MR_API).replace(/\/+$/, '');
+  MODRINTH_API = mrBase;
+  MR_MIRROR = mrBase;   /* 镜像路径是 MR_MIRROR + '/modrinth/v2' + p，本地服务器一并认 */
+}
 const MR_OFFICIAL_TIMEOUT = 6000;   // 官方源响应时限（超时视为"加载缓慢"）
 let mrMirrorUntil = 0;              // 该时间戳之前优先走镜像
 function mrUA() { return 'XLC/' + APP_VERSION + ' (launcher; +https://github.com/lmc-launcher)'; }
@@ -4467,6 +4669,10 @@ async function installModrinthIndex(index, packBuf, displayName, dlsig, win) {
   const popInstall = progWinPush(w.base, w.span * 0.7);   /* 装游戏本体 / 加载器：0~70% */
   try {
     versionId = await installMcWithLoader(mcVer, loader, name, { build: loaderBuild, buildSoft: true });
+  } catch (e) {
+    /* 装游戏本体/加载器就失败了：实例目录里啥也没有，把它收掉再抛，别在 versions 里留空壳 */
+    await pruneEmptyVersionDir(path.join(config.gameDir, 'versions', name), name);
+    throw e;
   } finally { popInstall(); }
   /* 包名里的中文别再一起丢掉：目录仍叫 name（ASCII），界面显示 xlcTitle */
   await setInstanceTitle(versionId, displayName || index.name || name);
@@ -11653,37 +11859,49 @@ function updateParserSelfTest() {
  * 公告属于当前版本：改完就往这条里加条目，别再动已经发出去的内容（那是改写历史）。 */
 const CHANGELOG = [
   {
-    version: '1.5-snapshot2',
-    date: '2026-11-14',
+    version: '1.5-snapshot3',
+    date: '2026-11-15',
     tag: '快照版',
-    notice: '1.5 第二个快照：下载游戏的「安装」改成了一整页，布局照 PCL 的安装页 —— 顶上版本名一栏（改个名字就是装成另一个实例），下面一叠加载器卡片，右边直接写清「获取中… / 可以添加 / 不兼容的原因」；点开哪张卡片，就在卡片里直接铺出这个加载器的全部版本（最新版单独一块 + 每个版本带发布时间或稳定版标记），底部「开始下载」固定在窗口下沿。一张卡片都不展开就是原版。下载中按钮会变成「停止安装 / 转入后台」，进度、速度、剩余时间都留在页面里。',
+    notice: '1.5 第三个快照：两件事。一是下载页里整合包 / 资源包 / 光影包 / 数据包这四个「安装」按钮，不再闷头抓最新版 —— 点进去先是一整页的版本选择（顶部项目卡 + 按游戏版本筛的标签条 + 按 MC 版本折叠的文件列表），点哪个版本就装哪个，和 MOD 那一页是同一套版面。二是把下载链上几个会把整合包「装成半截」的问题修掉：以前碰上 CDN 限流或者代理抖一下，就会一路重试到整包失败，最后在 versions 里留一个空目录——界面版本列表看不到、文件夹里只有一个空壳（你报的就是这个）。现在限流会被当成「先等等」而不是「文件坏了」，临时文件被上次中断的残留占住也能自己换个名字重下，装失败会顺手把空壳清掉；「fetch failed」这种一句话报错也换成了人话 —— 到底是代理没开、直连被阻断还是网络抖了，一眼能看出来。',
     groups: [
       {
-        icon: 'i-download',
-        title: '新增 · 装游戏的入口也变成一整页',
+        icon: 'i-folder',
+        title: '修复 · 装完整合包，版本列表里却找不到',
         items: [
-          '**点「安装」不再弹小窗**：整页铺开，顶上版本名一栏（默认就是版本号），底下一行一个加载器，最下面「开始下载」—— 和装 MOD 那个整页同一个形状',
-          '**版本名可以改**：填了就用你填的名字装成新实例；留空还是按老规矩自动命名（带加载器时会带上加载器版本）',
-          '**返回键 / Esc / 右上角关闭都能退出**，点侧栏切页也会自动收起，不会出现「导航变了、画面还停在安装页」'
+          '**装失败不再留空壳目录**：一个只有空目录的实例会被当成「损坏」，界面直接不显示 —— 现在失败就清掉，重装也不会被上一次的残留挡住',
+          '**临时文件被占也能下**：上次中断留下的 `.xlc-tmp` 如果变成了目录，删不掉也写不进去（一直报「无法写入」），现在会换一个临时名字重新下',
+          '**重装前自动归档旧残留**：以前点了没反应、或者提示已经装过，现在会把没装完的那份收进 `__broken-时间戳` 再装'
         ]
       },
       {
-        icon: 'i-box',
-        title: '改进 · 加载器卡片：点开就把全部版本铺出来',
+        icon: 'i-zap',
+        title: '修复 · 下载源限流（429 / 503）被当成文件坏了',
         items: [
-          '**三种状态一眼看清**：「获取中…」= 还在问官方源；「可以添加」= 能装；不兼容直接把原因写出来（比如「远古版本无 Forge 构建」「NeoForge 仅支持 1.20.1 及以上」），查询超时也不会被当成不兼容',
-          '**点开卡片 = 卡片里直接列出全部版本**（不再是一个下拉框）：最上面单独一块「最新版」，下面「全部版本（N）」逐个排开，Forge 每个版本带「发布于 年/月/日 时:分」，Fabric / NeoForge / Quilt 标「稳定版 / 测试版」',
-          '**同一时间只展开一张卡片**（跟 PCL 一样的手风琴）：点另一张，前一张自动收起；再点已展开的那张就是收起，回到原版',
-          '**底部「开始下载」固定在窗口下沿**：版本再多也只是在它上面滚动；按钮上面一直写着当前选择（「将安装 26.3 · 原版」或「26.3 + Forge 60.0.1」）',
-          '**Quilt 留在卡片列表里**：PCL 的安装页只列 Forge / NeoForge / Fabric / OptiFine，照抄会把 Quilt 用户的路堵死，所以插在 Fabric 后面'
+          '**限流 = 先等等，不是失败**：服务器说「慢点」时按它给的等待时间退避重试，不再立刻换源乱撞',
+          '**16 线程分段遇到限流立刻退成单线程**：以前 16 个分段各重试 3 次，一次等待被放大成几十个请求，越试越封',
+          '**被限流的源 60 秒内不再并发探测**：直接单线程慢慢下，等冷却过去再恢复'
         ]
       },
       {
-        icon: 'i-stop',
-        title: '改进 · 下载中不用挤在小窗里看进度',
+        icon: 'i-globe',
+        title: '修复 · 开着代理却提示 fetch failed',
         items: [
-          '**开始下载后，按钮变「转入后台」，旁边多出「停止安装」**：进度条、当前阶段、实时速度、预计剩余都留在页面里，和右下角浮窗显示的是同一份数据',
-          '**装完自动退回并选中新实例**；停止或失败会留在页面上，加载器行重新可点，能改选一个再试'
+          '**代理抖一次不再「永久拉黑」**：以前某个域名代理失败过一次，就永远改直连 —— `cdn.modrinth.com` 这种直连必被阻断的地址，一次抖动等于整条下载链判死刑（实测连挂 12 次全部 fetch failed）',
+          '**直连兜底成功就恢复正常走代理**：只有在代理和直连都不通时才让这个源冷却 60 秒，过后自动重试代理，代理恢复了自己就好，不用重启启动器',
+          '**报错说人话**：「连接超时（直连被网络阻断，试试开代理/VPN）」「连接被拒绝（代理/VPN 没开，或端口已经换了？）」「域名解析失败（DNS 异常）」，不再是干巴巴一句 fetch failed'
+        ]
+      },
+      {
+        icon: 'i-list',
+        title: '新增 · 整合包 / 资源包 / 光影包 / 数据包：先选版本，再安装',
+        items: [
+          '**四类资源的「安装」都先进版本页**：以前点安装直接抓这个项目的最新文件，想装旧版只能认命；现在整合包、资源包、光影包、数据包都会先打开一整页的版本选择，跟 MOD 的版本页是同一套版面',
+          '**整页 = 项目卡 + 版本标签条 + 折叠的文件列表**：顶上是项目卡（图标、名称、分类标签、简介、下载量 / 更新时间 / 文件数）；中间一条「全部 9 / 26.3 3 / 26.2 2 …」按游戏版本筛；下面按 MC 版本折叠分组，组标题右边写「N 个文件」',
+          '**进来时全部收起，点哪个版本才铺开**：每个文件一行，写明版本号、文件名、大小、下载次数、更新时间；不会一进来就甩出上百行',
+          '**点哪个版本就装哪个**：整合包按选中的那个版本安装（不再「总是最新」）；资源包 / 光影 / 数据包把选中的那一个文件直接落盘 —— 行标题就是版本号或文件名，点之前能看清装的是哪一版',
+          '**按钮文案跟着类型变**：`安装整合包` / `安装资源包` / `安装光影` / `装入存档` —— 数据包点下去直接进上一页选好的那个存档，页面顶部还有一条提示写着「以下是该项目的『数据包』版本」',
+          '**MOD 那一页没动**：模组仍按加载器（Fabric / Forge / NeoForge / Quilt）分组、默认展开，只有这四类资源改成按游戏版本分组，别被「统一」掉',
+          '**版本标签条和折叠状态各记各的**：换项目、换类型都会重置成「全部 + 全收起」，不会带着上一次的筛选看新项目时误以为没文件'
         ]
       }
     ]

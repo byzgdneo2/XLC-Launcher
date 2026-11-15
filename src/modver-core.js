@@ -149,6 +149,23 @@ function groupByLoader(versions) {
   return [...map.keys()].sort((a, b) => rank(a) - rank(b))
     .map(loader => ({ loader, versions: map.get(loader) }));
 }
+/* 按声明的游戏版本分组（数据包 / 资源包 / 光影 / 整合包用）。
+   这四类没有「加载器」这一说，照 PCL 的下载页是按 MC 版本折叠的；
+   一个文件同时声明多个 MC 版本 → 每组里都会出现一份（和 groupByLoader 同理）。
+   快照 / 预发布这类非正式版本号不单开一组，统一并进「其他」，免得标题条被拆成一堆。 */
+function groupByGame(versions) {
+  const map = new Map();
+  for (const v of (versions || [])) {
+    const all = (v.gv || v.game_versions || []);
+    const names = [...new Set(all.filter(g => g && mcParts(g)))];
+    for (const n of (names.length ? names : ['其他'])) {
+      if (!map.has(n)) map.set(n, []);
+      map.get(n).push(v);
+    }
+  }
+  const keys = [...map.keys()].sort((a, b) => (a === '其他' ? 1 : b === '其他' ? -1 : cmpMc(a, b)));
+  return keys.map(gv => ({ gv, versions: map.get(gv) }));
+}
 /* Modrinth 分类 slug → 中文；认不出来的原样显示（首字母大写），别丢信息 */
 const CAT_ZH = {
   adventure: '冒险', decoration: '装饰', optimization: '优化', library: '支持库',
@@ -169,5 +186,5 @@ function catLabel(slug) {
 
 module.exports = {
   LOADER_MAP, LOADER_ORDER, normLoader, loadersOf, collectLoaders, filterByLoader, defaultLoader,
-  mcParts, cmpMc, collectGameVersions, filterByGame, depsOf, needCount, mcWikiUrl, groupByLoader, CAT_ZH, catLabel
+  mcParts, cmpMc, collectGameVersions, filterByGame, depsOf, needCount, mcWikiUrl, groupByLoader, groupByGame, CAT_ZH, catLabel
 };

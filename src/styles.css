@@ -927,6 +927,18 @@ body.light-bg .diag-ai{ --acc-border:rgba(16,163,127,.3); }
 
 /* ---- 加载器分组：表头可折叠，展开后是「前置资源 + 版本列表」 ---- */
 .mvp-group{ padding:0; overflow:hidden; }
+/* 非 MOD（整合包 / 资源包 / 光影 / 数据包）：按 MC 版本折叠，标题条只放版本号，
+   展开后直接是文件行 —— 没有前置资源那一段 */
+.mvp-gvg .mvp-gh-l{ font-family:var(--mono); letter-spacing:.3px; }
+.mvp-gvg .mvp-gbody{ padding-top:2px; }
+/* 数据包页顶上那句说明（照 PCL 的提示条） */
+.mvp-note{
+  display:flex; align-items:baseline; flex-wrap:wrap; gap:6px;
+  padding:11px 15px; border-radius:var(--r-md);
+  border:1px solid rgba(52,211,153,.22); background:rgba(52,211,153,.07);
+  font-size:12.5px; color:var(--tx2); line-height:1.55;
+}
+.mvp-note b{ color:var(--tx); }
 .mvp-gh{
   width:100%; display:flex; align-items:center; gap:10px; padding:15px 18px;
   background:transparent; border:none; color:var(--tx); cursor:pointer; text-align:left;

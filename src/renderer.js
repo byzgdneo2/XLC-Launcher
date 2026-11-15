@@ -2906,8 +2906,17 @@ let mvToken = 0;                               /* 每次加载自增：慢请求
 let mvState = null;                            /* { project, versions, depMap, source, depsKnown } */
 const MV_STACK = [];                           /* 面包屑栈：[{ id, source, title }] */
 const MV_INSTALLED = new Set();                /* 本次页面存活期里装过的项目 id（前置卡片上打勾） */
-const MV_CTX = { onPick: null, preferLoader: '', gv: '__all__', collapsed: new Set() };
+const MV_CTX = { onPick: null, preferLoader: '', gv: '__all__', collapsed: new Set(), type: 'mod' };
 const MV_MAX_ROWS = 40;
+/* 这个页面现在五类资源共用（MOD / 整合包 / 资源包 / 光影 / 数据包）：
+   MOD 按加载器分组，其余四类没有加载器 → 按游戏版本分组，按钮文案也跟着换。 */
+const MV_TYPE_CTA = {
+  mod: '安装', modpack: '安装整合包', resourcepack: '安装资源包',
+  shader: '安装光影', datapack: '装入存档'
+};
+const MV_TYPE_NAME = { mod: 'MOD', modpack: '整合包', resourcepack: '资源包', shader: '光影', datapack: '数据包' };
+const mvType = () => (MV_TYPE_CTA[MV_CTX.type] ? MV_CTX.type : 'mod');
+const mvIsMod = () => mvType() === 'mod';
 
 /* ---- 相对时间 / 下载量：PCL 那种「14 小时前」「33 万」 ---- */
 function mvAgo(iso) {
@@ -2940,6 +2949,7 @@ function closeModPage() {
   MV_INSTALLED.clear();
   mvState = null;
   MV_CTX.onPick = null;
+  MV_CTX.type = 'mod';
   mvToken++;
 }
 
@@ -3006,10 +3016,12 @@ function mvDepHtml(d) {
 
 /* ---- 版本行：版本号 + 加载器 / 前置数 / 大小 / 下载次数 / 更新时间 + 文件名 ---- */
 function mvRowHtml(v, gi) {
-  const n = MV.needCount(v);
   const meta = [];
-  if (v.loaders && v.loaders.length) meta.push(esc(v.loaders.join(' / ')));
-  meta.push(n ? '<b class="mvp-need">' + n + ' 项前置</b>' : '无前置');
+  if (mvIsMod()) {
+    const n = MV.needCount(v);
+    if (v.loaders && v.loaders.length) meta.push(esc(v.loaders.join(' / ')));
+    meta.push(n ? '<b class="mvp-need">' + n + ' 项前置</b>' : '无前置');
+  }
   if (v.size) meta.push(fmtSizeB(v.size));
   if (v.downloads) meta.push('下载 ' + mvCount(v.downloads) + ' 次');
   if (v.date) meta.push('更新于 ' + mvAgo(v.date));
@@ -3020,7 +3032,8 @@ function mvRowHtml(v, gi) {
       '<div class="mvp-row-m">' + meta.join('<span class="mvp-dot">·</span>') + '</div>' +
       (v.filename ? '<div class="mvp-row-f">' + esc(v.filename) + '</div>' : '') +
     '</div>' +
-    '<button class="btn primary mvp-inst" data-g="' + gi + '" data-ref="' + esc(v.ref) + '">安装</button>' +
+    '<button class="btn primary mvp-inst" data-g="' + gi + '" data-ref="' + esc(v.ref) + '">' +
+      esc(MV_TYPE_CTA[mvType()]) + '</button>' +
   '</div>';
 }
 
@@ -3064,21 +3077,61 @@ function mvGroupHtml(g, gi) {
   '</div>';
 }
 
+/* ---- 非 MOD（整合包 / 资源包 / 光影 / 数据包）：一组 = 一个游戏版本 ----
+   这四类没有加载器，照 PCL 的下载页按 MC 版本折叠：标题条就是版本号，点开才铺文件。 */
+function mvGameGroupHtml(g, gi) {
+  const collapsed = MV_CTX.collapsed.has(g.gv);
+  const shown = g.versions.slice(0, MV_MAX_ROWS);
+  return '<div class="card mvp-group mvp-gvg' + (collapsed ? ' collapsed' : '') + '">' +
+    '<button class="mvp-gh" data-ld="' + esc(g.gv) + '">' +
+      '<span class="mvp-gh-l">' + esc(g.gv) + '</span>' +
+      '<span class="mvp-gh-n">' + g.versions.length + ' 个文件</span>' +
+      '<svg class="ic sm mvp-chev"><use href="#i-chev-d"/></svg>' +
+    '</button>' +
+    '<div class="mvp-gbody">' +
+      '<div class="mvp-rows">' + shown.map(v => mvRowHtml(v, gi)).join('') + '</div>' +
+      (g.versions.length > shown.length
+        ? '<div class="mvp-more">共 ' + g.versions.length + ' 个，只列最新 ' + shown.length + ' 个</div>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+/* 数据包页顶上那句说明（照 PCL）：讲清楚这里列的是数据包版本，
+   装到哪个存档由上一页的「目标存档」决定 —— 不然用户会以为选完版本就直接进游戏 */
+function mvNoteHtml() {
+  if (mvType() !== 'datapack') return '';
+  return '<div class="mvp-note"><b>以下是该项目的「数据包」版本。</b>' +
+    '<span>装进哪个存档由上一页选好的「目标存档」决定；想装它的 MOD 版本，回上一页到「模组」里搜同名项目。</span></div>';
+}
+
 function mvRender() {
   const body = $('#mvBody');
   if (!body || !mvState) return;
   const keep = body.scrollTop;
   const vers = MV.filterByGame(mvState.versions, MV_CTX.gv);
-  let groups = MV.groupByLoader(vers);
-  /* 目标实例的加载器排最前面：装进 Fabric 实例的人不用先划过 NeoForge */
-  const want = String(MV_CTX.preferLoader || '').toLowerCase();
-  if (want) {
-    const hit = groups.filter(g => g.loader.toLowerCase() === want);
-    groups = hit.concat(groups.filter(g => g.loader.toLowerCase() !== want));
+  let blocks;
+  if (mvIsMod()) {
+    let groups = MV.groupByLoader(vers);
+    /* 目标实例的加载器排最前面：装进 Fabric 实例的人不用先划过 NeoForge */
+    const want = String(MV_CTX.preferLoader || '').toLowerCase();
+    if (want) {
+      const hit = groups.filter(g => g.loader.toLowerCase() === want);
+      groups = hit.concat(groups.filter(g => g.loader.toLowerCase() !== want));
+    }
+    blocks = groups.map((g, i) => mvGroupHtml(g, i));
+  } else {
+    const games = MV.groupByGame(vers);
+    /* 照 PCL：进来时全部收起，点哪个版本才铺开 —— 一屏先看清有哪些 MC 版本可选。
+       只在这次打开页面的第一帧收一次，用户自己展开的状态后面不会被重画冲掉。 */
+    if (!MV_CTX.gvSeeded) {
+      for (const g of games) MV_CTX.collapsed.add(g.gv);
+      MV_CTX.gvSeeded = true;
+    }
+    blocks = games.map((g, i) => mvGameGroupHtml(g, i));
   }
-  body.innerHTML = mvHeroHtml() + mvTabsHtml() +
-    (groups.length
-      ? groups.map((g, i) => mvGroupHtml(g, i)).join('')
+  body.innerHTML = mvHeroHtml() + mvTabsHtml() + mvNoteHtml() +
+    (blocks.length
+      ? blocks.join('')
       : '<div class="card mvp-empty">这个游戏版本下还没有文件 —— 换一个版本标签看看</div>');
   body.scrollTop = keep;
 
@@ -3125,12 +3178,16 @@ async function mvLoad(entry) {
   mvState = null;
   MV_CTX.gv = '__all__';
   MV_CTX.collapsed = new Set();
+  MV_CTX.gvSeeded = false;
   if (mvPageEl) mvPageEl.style.display = 'flex';
   const parent = MV_STACK.length > 1 ? MV_STACK[MV_STACK.length - 2] : null;
   $('#mvTitle').textContent = entry.title || '模组';
   $('#mvSub').textContent = parent
     ? '前置资源 · 装完会回到「' + (parent.title || '上一层') + '」'
-    : '先选要安装的版本，再决定装到哪';
+    : (mvType() === 'datapack'
+      ? '先选数据包版本，再装进上一页选好的存档'
+      : mvIsMod() ? '先选要安装的版本，再决定装到哪'
+        : '先选' + (MV_TYPE_NAME[mvType()] || '') + '版本，选定后直接安装');
   $('#mvBack').title = parent ? '返回「' + (parent.title || '上一层') + '」' : '返回下载页';
   const body = $('#mvBody');
   body.innerHTML = '<div class="mvp-loading"><span class="mvp-spin"></span>正在读取项目信息…</div>';
@@ -3184,9 +3241,11 @@ async function mvInstall(v, btn) {
   }
 }
 
-/* 对外入口（名字沿用旧的，调用方不用改语义）：先弹页面，再按来源拉项目信息 */
-async function openModVerPicker(h, source, onPick, preferLoader) {
+/* 对外入口（名字沿用旧的，调用方不用改语义）：先弹页面，再按来源拉项目信息。
+   type：mod（默认）/ modpack / resourcepack / shader / datapack —— 决定分组方式与按钮文案。 */
+async function openModVerPicker(h, source, onPick, preferLoader, type) {
   if (!mvPageEl) return;
+  MV_CTX.type = MV_TYPE_CTA[type] ? type : 'mod';
   MV_CTX.onPick = onPick || null;
   MV_CTX.preferLoader = preferLoader || '';
   MV_INSTALLED.clear();
@@ -3218,6 +3277,46 @@ async function installModVersion(h, source, v, t, btn) {
   else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
   else if (rr.saved) toast('MOD 已保存到: ' + rr.path);
   else toast('已装入 ' + t + '：' + rr.file);
+  return rr;
+}
+
+/* 整合包：在版本页里选定某个版本后真正开装（versionId 直接交给主进程，不再取「最新」） */
+async function installModpackVersion(h, v, btn) {
+  const jk = 'modpack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+  const rr = await dlGuarded(btn, jk, '下载安装中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包', () =>
+    window.lmc.modrinthInstallModpack({ projectId: h.id, versionId: v.ref, name: h.title, jobKey: jk }));
+  dlTaskFinish(!!rr.ok, rr.error || '');
+  if (!rr.ok) {
+    toast(rr.cancelled ? '已取消下载' : '安装失败: ' + rr.error, rr.cancelled ? 'warn' : 'error');
+    return rr;
+  }
+  await scanDir();
+  selectVersion(rr.versionId, true);
+  toast('整合包就绪: ' + rr.versionId);
+  return rr;
+}
+
+/* 资源包 / 光影 / 数据包：同一个通道（modrinth:install-pack），区别只在落点：
+   资源包进 resourcepacks、光影进 shaderpacks（可指定实例）、数据包进选中存档的 datapacks。
+   fileRef = 用户在版本页点的那一条，主进程照着它下，不再自动挑最新。 */
+async function installPackVersion(h, src, type, v, opts, btn) {
+  const jk = type + '|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
+  const label = { resourcepack: '安装资源包', shader: '安装光影', datapack: '装入存档' }[type] || '安装';
+  const p = { type, projectId: h.id, source: src, fileRef: v.ref, jobKey: jk };
+  if (type === 'shader') p.instance = (opts && opts.instance) || '';
+  if (type === 'datapack') p.world = (opts && opts.world) || '';
+  const rr = await dlGuarded(btn, jk, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> ' + label, () =>
+    window.lmc.modrinthInstallPack(p));
+  if (rr.cancelled) toast('已取消下载', 'warn');
+  else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+  else if (type === 'shader') {
+    toast('光影已装到 ' + (((opts && opts.instance) || '') ? opts.instance : '游戏根目录') + '：' + rr.file +
+      '（游戏内用 Iris / OptiFine 选中即可生效）');
+  } else if (type === 'datapack') {
+    toast('数据包已装入存档：' + rr.file + '（进入世界后自动生效）');
+  } else {
+    toast('资源包已安装: ' + rr.file);
+  }
   return rr;
 }
 
@@ -3430,33 +3529,20 @@ function setupResPage(cfg) {
             (v, proj, b) => installModVersion(proj || h, (proj && proj.source) || itemSrc(h), v, t, b || btn),
             inst && inst.loader);
         } else if (cfg.type === 'modpack') {
-          const jkMp = 'modpack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const rr = await dlGuarded(btn, jkMp, '下载安装中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装整合包', () =>
-            window.lmc.modrinthInstallModpack({ projectId: h.id, name: h.title, jobKey: jkMp }));
-          dlTaskFinish(!!rr.ok, rr.error || '');
-          if (!rr.ok) {
-            toast(rr.cancelled ? '已取消下载' : '安装失败: ' + rr.error, rr.cancelled ? 'warn' : 'error');
-            return;
-          }
-          await scanDir();
-          selectVersion(rr.versionId, true);
-          toast('整合包就绪: ' + rr.versionId);
+          /* 先开版本页：整合包不同版本对应不同 MC 版本 / 加载器，装错了要重下几百 MB */
+          openModVerPicker(h, itemSrc(h),
+            (v, proj, b) => installModpackVersion(proj || h, v, b || btn), '', 'modpack');
         } else if (cfg.type === 'resourcepack') {
-          const jkRp = 'resourcepack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const rr = await dlGuarded(btn, jkRp, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装资源包', () =>
-            window.lmc.modrinthInstallPack({ type: 'resourcepack', projectId: h.id, jobKey: jkRp }));
-          if (rr.cancelled) toast('已取消下载', 'warn');
-          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          openModVerPicker(h, itemSrc(h),
+            (v, proj, b) => installPackVersion(proj || h, (proj && proj.source) || itemSrc(h),
+              'resourcepack', v, {}, b || btn), '', 'resourcepack');
         } else if (cfg.type === 'shader') {
           /* 目标版本选「全部」→ 不指定实例，装到游戏根目录的 shaderpacks */
           const rawT = cfg.targetSel ? $(cfg.targetSel).value : '';
           const inst = rawT === '__all__' ? '' : rawT;
-          const jkSh = 'shader|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const rr = await dlGuarded(btn, jkSh, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 安装光影', () =>
-            window.lmc.modrinthInstallPack({ type: 'shader', projectId: h.id, instance: inst, source: itemSrc(h), jobKey: jkSh }));
-          if (rr.cancelled) toast('已取消下载', 'warn');
-          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
-          else toast('光影已装到 ' + (inst || '游戏根目录') + '：' + rr.file + '（游戏内用 Iris / OptiFine 选中即可生效）');
+          openModVerPicker(h, itemSrc(h),
+            (v, proj, b) => installPackVersion(proj || h, (proj && proj.source) || itemSrc(h),
+              'shader', v, { instance: inst }, b || btn), '', 'shader');
         } else if (cfg.type === 'world') {
           /* 世界（存档）：只走 CurseForge。目标留在「全部」→ 游戏共享的 saves；
              选了具体实例 → 导到该实例（隔离实例进 versions/<实例>/saves，游戏才读得到，审计 W1）。
@@ -3476,11 +3562,10 @@ function setupResPage(cfg) {
         } else { // datapack
           const w = cfg.targetSel ? $(cfg.targetSel).value : '';
           if (!w) { toast('请先选择一个存档（世界）', 'warn'); return; }
-          const jkDp = 'datapack|' + h.id + '|' + Math.random().toString(36).slice(2, 8);
-          const rr = await dlGuarded(btn, jkDp, '下载中…', '<svg class="ic sm"><use href="#i-download"/></svg> 装入选中存档', () =>
-            window.lmc.modrinthInstallPack({ type: 'datapack', projectId: h.id, world: w, jobKey: jkDp }));
-          if (rr.cancelled) toast('已取消下载', 'warn');
-          else if (!rr.ok) toast('安装失败: ' + rr.error, 'error');
+          /* 数据包也要先选版本：同一个包在不同 MC 版本下格式不一样，装错了游戏直接不认 */
+          openModVerPicker(h, itemSrc(h),
+            (v, proj, b) => installPackVersion(proj || h, (proj && proj.source) || itemSrc(h),
+              'datapack', v, { world: w }, b || btn), '', 'datapack');
         }
       });
       act.appendChild(dbtn);
