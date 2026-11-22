@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://byzgdneo2.github.io/XLC-Launcher/sitemap.xml

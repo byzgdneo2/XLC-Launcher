@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XLC 启动器 - Minecraft Java 版启动器下载 | Windows 免安装</title>
+  <meta name="description" content="XLC 启动器是 Windows 平台的 Minecraft Java 版启动器，单文件便携免安装，支持 Forge、Fabric、NeoForge、Quilt、OptiFine、MOD 管理、存档备份、微软登录与内置插件。立即下载。">
+  <meta name="keywords" content="XLC 启动器, XLC Launcher, Minecraft 启动器, Minecraft Java 启动器, Fabric 启动器, Forge 启动器, 我的世界启动器, 免安装启动器, Windows 启动器">
+  <meta name="author" content="Xero Lite Craft">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <link rel="canonical" href="https://byzgdneo2.github.io/XLC-Launcher/">
+  <link rel="icon" type="image/png" href="assets/icon.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="XLC Launcher">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:url" content="https://byzgdneo2.github.io/XLC-Launcher/">
+  <meta property="og:title" content="XLC 启动器 - Windows 上的 Minecraft Java 版启动器">
+  <meta property="og:description" content="单文件便携、开箱即用。支持多实例、加载器一键安装、MOD 与整合包管理、存档备份、微软登录和内置插件。">
+  <meta property="og:image" content="https://byzgdneo2.github.io/XLC-Launcher/assets/home.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="XLC 启动器 - Windows 上的 Minecraft Java 版启动器">
+  <meta name="twitter:description" content="单文件便携、开箱即用的 Minecraft Java 版启动器。">
+  <meta name="twitter:image" content="https://byzgdneo2.github.io/XLC-Launcher/assets/home.png">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "XLC Launcher",
+    "alternateName": "XLC 启动器",
+    "description": "Windows 平台的 Minecraft Java 版启动器，单文件便携运行，支持多实例、模组加载器一键安装、MOD 与整合包管理、存档备份、微软登录和内置插件。",
+    "operatingSystem": "Windows",
+    "applicationCategory": "GameApplication",
+    "softwareVersion": "1.5-snapshot3",
+    "url": "https://byzgdneo2.github.io/XLC-Launcher/",
+    "downloadUrl": "https://github.com/byzgdneo2/XLC-Launcher/releases/download/v1.5-snapshot3/XLC-Launcher-1.5-snapshot3-portable.exe",
+    "author": {
+      "@type": "Organization",
+      "name": "Xero Lite Craft",
+      "url": "https://github.com/byzgdneo2/XLC-Launcher"
+    },
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "CNY"
+    },
+    "screenshot": [
+      "https://byzgdneo2.github.io/XLC-Launcher/assets/home.png",
+      "https://byzgdneo2.github.io/XLC-Launcher/assets/mods.png",
+      "https://byzgdneo2.github.io/XLC-Launcher/assets/modver.png"
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "XLC 启动器需要安装吗？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "不需要。XLC 启动器提供单文件便携版，下载后双击即可运行，不写注册表、不安装系统服务。配置与游戏数据保存在 exe 旁边的 XLC数据 目录。"
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "XLC 启动器支持哪些模组加载器？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "支持 Forge、NeoForge、Fabric、Quilt 与 OptiFine 的一键安装和版本切换，并对境内网络提供镜像加速。"
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "XLC 启动器支持哪些登录方式？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "支持离线登录、微软正版登录，以及第三方外置登录（Yggdrasil）。离线账户也可以在本地设置皮肤。"
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "游戏数据存在哪里？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "默认存放在启动器可执行文件旁边的 .minecraft 目录，启动器自身配置存放在 XLC数据 目录，方便整体备份或迁移。"
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "遇到问题怎么反馈？",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "到 GitHub Issues 提交问题。若涉及安装失败或启动报错，请在启动器「设置 → 诊断」页导出崩溃日志一并附上，定位会快很多。"
+        }
+      }
+    ]
+  }
+  </script>
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="./" aria-label="XLC Launcher 首页">
+        <img src="assets/icon.png" alt="" width="36" height="36">
+        <span>XLC <span class="brand-light">Launcher</span></span>
+      </a>
+      <nav class="nav" aria-label="主导航">
+        <a href="#features">功能</a>
+        <a href="#showcase">界面</a>
+        <a href="#download">下载</a>
+        <a href="#faq">常见问题</a>
+        <a href="https://github.com/byzgdneo2/XLC-Launcher" rel="noopener">GitHub</a>
+      </nav>
+      <a class="btn btn-small" href="https://github.com/byzgdneo2/XLC-Launcher/releases/latest" rel="noopener">下载</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">Windows · 单文件便携 · 开箱即用</p>
+          <h1>把 Minecraft<br><span>装进一个启动器</span></h1>
+          <p class="lead">XLC 启动器是一款面向 Windows 的 Minecraft Java 版启动器。多实例管理、加载器一键安装、MOD 与整合包下载、存档备份、皮肤预览和内置插件，都在同一个窗口里完成。</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="https://github.com/byzgdneo2/XLC-Launcher/releases/latest" rel="noopener">下载最新版</a>
+            <a class="btn btn-ghost" href="#features">看看能做什么</a>
+          </div>
+          <p class="version-line">最新公开版本 <strong>1.5-snapshot3</strong> · 稳定版 <strong>1.4</strong> · 每个发行版附 MD5 校验</p>
+        </div>
+        <div class="hero-visual">
+          <div class="window-frame">
+            <div class="window-bar"><i></i><i></i><i></i><span>XLC Launcher</span></div>
+            <img src="assets/home.png" alt="XLC 启动器主界面：版本选择、启动日志、存档与最近游玩卡片" width="2560" height="1528" fetchpriority="high">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="wrap">
+        <header class="section-head">
+          <h2>一个启动器，管好整个游戏</h2>
+          <p>从装游戏到装 MOD，从存档备份到联机对表，少在几个工具之间来回跳。</p>
+        </header>
+        <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-no">01</span>
+            <h3>多实例与版本隔离</h3>
+            <p>不同游戏版本、不同模组组合各自独立。内存、Java 路径、启动参数都能按实例单独设置，互不干扰。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-no">02</span>
+            <h3>加载器一键安装</h3>
+            <p>Forge、NeoForge、Fabric、Quilt、OptiFine 直接选版本安装；镜像加速，境内网络也能顺畅下载。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-no">03</span>
+            <h3>MOD 与整合包</h3>
+            <p>从 Modrinth 与 CurseForge 搜索，按游戏版本筛选后安装；自动处理前置依赖，下载中途可停止，不留半截文件。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-no">04</span>
+            <h3>存档与资源保护</h3>
+            <p>内置存档备份插件，支持手动、启动前、退出后自动备份；资源包、光影包、数据包统一扫描与管理。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-no">05</span>
+            <h3>账户与皮肤</h3>
+            <p>离线登录、微软登录、Yggdrasil 外置登录；账户页提供 3D 皮肤预览，走路、跑步、游泳、坐下等动作都能看。</p>
+          </article>
+          <article class="feature">
+            <span class="feature-no">06</span>
+            <h3>诊断与插件</h3>
+            <p>设置页内置诊断与崩溃日志导出；插件面板支持模组翻译器、手柄控制、联机模组清单对齐等扩展能力。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="showcase" class="section section-alt">
+      <div class="wrap">
+        <header class="section-head">
+          <h2>界面一览</h2>
+          <p>深色界面、绿色主按钮，信息密度和可读性兼顾。</p>
+        </header>
+        <div class="shot-grid">
+          <figure class="shot shot-wide">
+            <img src="assets/mods.png" alt="MOD 搜索与下载页面，按游戏版本和加载器筛选" loading="lazy" width="2560" height="1528">
+            <figcaption>MOD 搜索与版本筛选</figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="assets/modver.png" alt="模组版本选择页面，展示按 Minecraft 版本折叠的文件列表" loading="lazy" width="2560" height="1528">
+            <figcaption>先选版本，再安装</figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="assets/skin.png" alt="账户页皮肤预览卡片，显示角色不同动作" loading="lazy" width="2240" height="854">
+            <figcaption>账户页皮肤预览</figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="assets/community.png" alt="启动器内嵌的社区页面" loading="lazy" width="1830" height="1170">
+            <figcaption>启动器内社区入口</figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="assets/diag.png" alt="诊断页面，包含游戏崩溃诊断与导出日志按钮" loading="lazy" width="1922" height="1352">
+            <figcaption>诊断与日志导出</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="section">
+      <div class="wrap download-layout">
+        <div>
+          <header class="section-head left">
+            <h2>下载 XLC 启动器</h2>
+            <p>全部为免安装便携版。下载后双击即可运行，配置与游戏数据放在 exe 旁边的 <code>XLC数据</code> 目录，不写注册表、不装系统服务。</p>
+          </header>
+          <div class="download-cards">
+            <article class="download-card">
+              <p class="tag">最新公开版本</p>
+              <h3>1.5-snapshot3</h3>
+              <p>快照版，包含下载安装整页化、模组版本页、社区入口、诊断日志导出等新功能。</p>
+              <a class="btn btn-primary btn-block" href="https://github.com/byzgdneo2/XLC-Launcher/releases/download/v1.5-snapshot3/XLC-Launcher-1.5-snapshot3-portable.exe" rel="noopener">下载便携版 .exe</a>
+            </article>
+            <article class="download-card">
+              <p class="tag">稳定版</p>
+              <h3>1.4</h3>
+              <p>适合日常使用。皮肤预览转正，更新支持官网优先、GitHub 兜底。</p>
+              <a class="btn btn-ghost btn-block" href="https://github.com/byzgdneo2/XLC-Launcher/releases/download/v1.4/XLC-Launcher-1.4-portable.exe" rel="noopener">下载便携版 .exe</a>
+            </article>
+          </div>
+          <p class="fineprint">历史版本、MD5 与 SHA256 校验值见 <a href="https://github.com/byzgdneo2/XLC-Launcher/releases" rel="noopener">GitHub Releases</a>。</p>
+        </div>
+        <aside class="side-card">
+          <h3>需要开发插件？</h3>
+          <p>启动器内置插件系统，可按文档开发自己的扩展。</p>
+          <a href="plugin-guide.html">阅读插件开发指南 →</a>
+          <a href="https://github.com/byzgdneo2/XLC-Launcher/issues" rel="noopener">提交问题或建议 →</a>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section section-alt">
+      <div class="wrap prose-narrow">
+        <h2>关于 XLC</h2>
+        <p>XLC Launcher 由 Xero Lite Craft 独立开发，基于 Electron，使用 MIT 许可证开源。界面与交互设计参考过 PCL、星落 LaunCher 等项目，仅借鉴功能形态，相关代码均为独立实现，未复制上述项目的源代码或美术资源，也不存在隶属、赞助或背书关系。</p>
+        <p>本项目与 Mojang / Microsoft 无关；Minecraft 是 Mojang AB 的商标，请支持正版。部分在线资源依赖 BMCLAPI 等公共镜像服务，感谢维护者的付出。</p>
+      </div>
+    </section>
+
+    <section id="faq" class="section">
+      <div class="wrap prose-narrow">
+        <header class="section-head left">
+          <h2>常见问题</h2>
+          <p>没找到答案？到 GitHub Issues 提问。</p>
+        </header>
+        <div class="faq-list">
+          <details open>
+            <summary>XLC 启动器需要安装吗？</summary>
+            <p>不需要。提供单文件便携版，下载后双击即可运行，不写注册表、不安装系统服务。配置与游戏数据保存在 exe 旁边的 <code>XLC数据</code> 目录。</p>
+          </details>
+          <details>
+            <summary>XLC 启动器支持哪些模组加载器？</summary>
+            <p>支持 Forge、NeoForge、Fabric、Quilt 与 OptiFine 的一键安装和版本切换，并对境内网络提供镜像加速。</p>
+          </details>
+          <details>
+            <summary>XLC 启动器支持哪些登录方式？</summary>
+            <p>支持离线登录、微软正版登录，以及第三方外置登录（Yggdrasil）。离线账户也可以在本地设置皮肤。</p>
+          </details>
+          <details>
+            <summary>游戏数据存在哪里？</summary>
+            <p>默认存放在启动器可执行文件旁边的 <code>.minecraft</code> 目录，启动器自身配置存放在 <code>XLC数据</code> 目录，方便整体备份或迁移。</p>
+          </details>
+          <details>
+            <summary>遇到问题怎么反馈？</summary>
+            <p>到 <a href="https://github.com/byzgdneo2/XLC-Launcher/issues" rel="noopener">GitHub Issues</a> 提交问题。若涉及安装失败或启动报错，请在启动器「设置 → 诊断」页导出崩溃日志一并附上，定位会快很多。</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div>
+        <strong>XLC Launcher</strong>
+        <p>Windows · Minecraft Java Edition · MIT License</p>
+      </div>
+      <nav aria-label="页脚导航">
+        <a href="https://github.com/byzgdneo2/XLC-Launcher" rel="noopener">GitHub</a>
+        <a href="https://github.com/byzgdneo2/XLC-Launcher/releases" rel="noopener">Releases</a>
+        <a href="https://github.com/byzgdneo2/XLC-Launcher/issues" rel="noopener">Issues</a>
+        <a href="plugin-guide.html">插件文档</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
