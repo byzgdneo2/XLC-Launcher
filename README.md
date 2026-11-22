@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 
+[官方网站](https://byzgdneo2.github.io/XLC-Launcher/) · [下载最新版](https://github.com/byzgdneo2/XLC-Launcher/releases/latest)
+
 XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，单文件便携运行，开箱即用。
 
 ## 功能一览
