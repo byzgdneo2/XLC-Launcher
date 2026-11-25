@@ -1,10 +1,61 @@
-# XLC Launcher
+<p align="center">
+  <img src="docs/assets/icon.png" width="128" alt="XLC Launcher">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
+<p align="center">
+  <h1>XLC Launcher</h1>
+</p>
 
-[官方网站](https://byzgdneo2.github.io/XLC-Launcher/) · [下载最新版](https://github.com/byzgdneo2/XLC-Launcher/releases/latest)
+<p align="center">
+  <b>Windows 上的 Minecraft Java 版启动器</b><br>
+  单文件便携运行 · 开箱即用 · 配置与数据都留在自己电脑上
+</p>
 
-XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，单文件便携运行，开箱即用。
+<p align="center">
+  <a href="https://github.com/byzgdneo2/XLC-Launcher/stargazers">
+    <img src="https://img.shields.io/github/stars/byzgdneo2/XLC-Launcher?style=flat-square&label=Stars" alt="Stars">
+  </a>
+  <a href="https://github.com/byzgdneo2/XLC-Launcher/network/members">
+    <img src="https://img.shields.io/github/forks/byzgdneo2/XLC-Launcher?style=flat-square&label=Forks" alt="Forks">
+  </a>
+  <a href="https://github.com/byzgdneo2/XLC-Launcher/issues">
+    <img src="https://img.shields.io/github/issues/byzgdneo2/XLC-Launcher?style=flat-square&label=issues" alt="issues">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/byzgdneo2/XLC-Launcher?style=flat-square&label=License" alt="MIT License">
+  </a>
+  <a href="https://byzgdneo2.github.io/XLC-Launcher/">
+    <img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-2f6feb?style=flat-square" alt="官网">
+  </a>
+  <a href="https://github.com/byzgdneo2/XLC-Launcher/releases/latest">
+    <img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-latest--green?style=flat-square" alt="下载">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://byzgdneo2.github.io/XLC-Launcher/">官方网站</a> ·
+  <a href="https://github.com/byzgdneo2/XLC-Launcher/releases/latest">下载最新版</a> ·
+  <a href="https://github.com/byzgdneo2/XLC-Launcher/issues">反馈问题</a>
+</p>
+
+## 简介
+
+这是一个运行在 Windows 上的 **Minecraft Java 版启动器**，单文件便携运行，双击即用。
+它把「装游戏本体、装模组、装整合包、配 Java、管存档、管账户」这些事都收在一个窗口里，
+不用再折腾手动下文件、丢进文件夹、命令行参数。
+
+## 它有什么用？
+
+MC 玩家装游戏时最头疼的就是版本、模组、整合包这一堆东西互相打架：模组要对应某个游戏版本，
+整合包要自带加载器，Fabric 和 Forge 的加载器还不能混着放，出错了还常常看不懂报错。
+
+XLC 想做的就是把这些「该选哪个版本」的问题替用户先解决掉：
+
+- 游戏本体的安装、版本切换、实例管理，一页搞定
+- 模组、整合包、资源包、光影包、数据包：装之前先选版本，不替你猜
+- 下载中的模组包随时能停，不留半截文件
+- 存档、账户、Java、内存这些日常配置，都在一个窗口里
+- 中文界面，境内网络有镜像加速
 
 ## 功能一览
 
@@ -37,7 +88,7 @@ XLC Launcher 是一款运行于 Windows 的 **Minecraft Java 版启动器**，�
 | 1.4 | `XLC-Launcher-1.4-portable.exe` | 正式版（最新正式版）：账户页皮肤预览的 Q 弹与转圈彩蛋转正；正式版更新改为官网优先下载、GitHub 兜底，两条都不通会直接提示下载失败 |
 | 1.4-rc1 | `XLC-Launcher-1.4-rc1-portable.exe` | 候选版：账户页皮肤预览活了 —— 坐下点一下画面小人会 Q 弹（压扁再弹回来）、连点 4 次触发彩蛋：转圈 + 放 BGM + 跟着鼓点每拍弹一下；弹跳从「每拍瞬间置形」改成连续曲线，不再一顿一顿；侧身满压扁顶出画布加了越界平移兜底 |
 | 1.4-pre1 | `XLC-Launcher-1.4-pre1-portable.exe` | 预发布：1.4 进入预发布阶段，这一版没有新功能，全在收口 —— 账户页「默认皮肤」两处说法统一（以前一边写史蒂夫、一边写按 UUID 分配）；插件安装补 CSP 前校验入口仍在解包目录内、整合包下载临时文件名只取 basename；账户页皮肤预览遇到坏图不再每帧重试解码，图片缓存加 32 条上限 |
-| 1.4-snapshot6 | `XLC-Launcher-1.4-snapshot6-portable.exe` | 上一快照：账户页的皮肤预览换成 3D —— 皮肤贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），侧面背面都能看、明暗跟着角度走；鼠标在启动器窗口里移动时头会跟着转（左右 ±46°、上下 ±26°，移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行就换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认） |
+| 1.4-snapshot6 | `XLC-Launcher-1.4-snapshot6-portable.exe` | 上一快照：账户页的皮肤预览换成 3D —— 皮肤贴到带厚度的立方体上（头 / 身 / 双臂 / 双腿），侧面背面都能看、明暗跟着角度走；鼠标在启动器窗口里移动时头会跟着转（左右 ±46°、上下 ±26°、移出窗口回正）；预览从「账户设置」弹窗搬到账户页右侧，点账户列表任意一行就换人，动作定成 5 个（走路 / 跑步 / 游泳 / 坐下 / 默认） |
 | 1.4-snapshot5 | `XLC-Launcher-1.4-snapshot5-portable.exe` | 上一快照：整合包导入实测修复 —— 分段下载不再永久卡死（本段收满即走 + 25 秒空闲超时）、Fabric / Quilt 加载器 jar 走 BMCLAPI 镜像、整合包声明的加载器版本不再被忽略、PCL「打包启动器」包装包可识别、CF 整合包 overrides 落实例目录、整合包文件按 sha1 校验、中文包名显示原名 |
 | 1.4-snapshot4 | `XLC-Launcher-1.4-snapshot4-portable.exe` | 上一快照：下载页皮肤改成三种来源（皮肤站 / 正版档案 / 本地文件，离线账户也能换皮肤）；皮肤库安全收口 —— 按 URL 导入拦内网/回环地址、改名补路径校验 |
 | 1.4-snapshot3 | `XLC-Launcher-1.4-snapshot3-portable.exe` | 上一快照：下载页新增「皮肤」分类（按正版玩家名抓 Mojang 官方皮肤）、账户设置新增皮肤库与六种动作预览；修复存档区块预览只能画成正方形；更新公告只留当前版本 |
